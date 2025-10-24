@@ -57,8 +57,47 @@ pub const SourceInfo = struct {
     }
 };
 
-/// Configuration loading result
-pub const ConfigResult = struct {
+/// Generic configuration loading result with type safety
+pub fn ConfigResult(comptime T: type) type {
+    return struct {
+        /// The loaded and parsed configuration
+        value: T,
+
+        /// Primary source of the configuration
+        source: ConfigSource,
+
+        /// All sources that contributed to the configuration
+        sources: []SourceInfo,
+
+        /// Timestamp when configuration was loaded
+        loaded_at: i64,
+
+        /// Allocator used for this result
+        allocator: std.mem.Allocator,
+
+        // Store the parsed result for proper cleanup
+        parsed_data: ?std.json.Parsed(T) = null,
+
+        const Self = @This();
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            // Free the parsed config value through the Parsed wrapper if available
+            if (self.parsed_data) |*parsed| {
+                parsed.deinit();
+            }
+            _ = allocator; // parsed.deinit() handles the allocator internally
+
+            // Free sources
+            for (self.sources) |*source_item| {
+                source_item.deinit(self.allocator);
+            }
+            self.allocator.free(self.sources);
+        }
+    };
+}
+
+/// Legacy untyped configuration result (for internal use)
+pub const UntypedConfigResult = struct {
     /// The loaded configuration
     config: std.json.Value,
 
@@ -77,7 +116,7 @@ pub const ConfigResult = struct {
     /// Parsed JSON data (if loaded from JSON file)
     parsed_json: ?std.json.Parsed(std.json.Value) = null,
 
-    pub fn deinit(self: *ConfigResult) void {
+    pub fn deinit(self: *UntypedConfigResult) void {
         // If we have parsed JSON data, free it first
         if (self.parsed_json) |*parsed| {
             parsed.deinit();
@@ -118,6 +157,23 @@ pub const ConfigResult = struct {
                 // Primitives (null, bool, integer, float, number_string) don't need freeing
             },
         }
+    }
+
+    /// Convert to typed result
+    pub fn toTyped(self: *UntypedConfigResult, comptime T: type) !ConfigResult(T) {
+        // Parse JSON value into struct
+        const parsed = try std.json.parseFromValue(T, self.allocator, self.config, .{
+            .allocate = .alloc_always,
+        });
+
+        return ConfigResult(T){
+            .value = parsed.value,
+            .source = self.source,
+            .sources = self.sources,
+            .loaded_at = self.loaded_at,
+            .allocator = self.allocator,
+            .parsed_data = parsed,
+        };
     }
 };
 

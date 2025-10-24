@@ -20,11 +20,11 @@ pub const ConfigLoader = struct {
         };
     }
 
-    /// Load configuration with multi-source fallback
+    /// Load configuration with multi-source fallback (untyped)
     pub fn load(
         self: *ConfigLoader,
         options: types.LoadOptions,
-    ) !types.ConfigResult {
+    ) !types.UntypedConfigResult {
         var sources = try std.ArrayList(types.SourceInfo).initCapacity(self.allocator, 4);
         defer sources.deinit(self.allocator);
 
@@ -94,7 +94,7 @@ pub const ConfigLoader = struct {
             });
         }
 
-        return types.ConfigResult{
+        return types.UntypedConfigResult{
             .config = with_env,
             .source = primary_source,
             .sources = try sources.toOwnedSlice(self.allocator),
@@ -129,25 +129,64 @@ pub const ConfigLoader = struct {
     }
 };
 
-/// Primary configuration loading function
+/// Primary typed configuration loading function
 pub fn loadConfig(
+    comptime T: type,
     allocator: std.mem.Allocator,
     options: types.LoadOptions,
-) !types.ConfigResult {
+) !types.ConfigResult(T) {
+    // First load as untyped JSON
+    var untyped = try loadConfigUntyped(allocator, options);
+    errdefer untyped.deinit();
+
+    // Parse into the target type
+    var parsed = try std.json.parseFromValue(T, allocator, untyped.config, .{
+        .allocate = .alloc_always,
+    });
+    errdefer parsed.deinit();
+
+    // Transfer ownership of sources to typed result
+    const result = types.ConfigResult(T){
+        .value = parsed.value,
+        .source = untyped.source,
+        .sources = untyped.sources,
+        .loaded_at = untyped.loaded_at,
+        .allocator = untyped.allocator,
+        .parsed_data = parsed,
+    };
+
+    // Clean up untyped config (but preserve sources)
+    untyped.sources = &.{}; // Transfer ownership
+    untyped.deinit();
+
+    return result;
+}
+
+/// Load untyped configuration (internal use)
+pub fn loadConfigUntyped(
+    allocator: std.mem.Allocator,
+    options: types.LoadOptions,
+) !types.UntypedConfigResult {
     var loader = try ConfigLoader.init(allocator);
     return try loader.load(options);
 }
 
 /// Try loading config, return null on error
 pub fn tryLoadConfig(
+    comptime T: type,
     allocator: std.mem.Allocator,
     options: types.LoadOptions,
-) ?types.ConfigResult {
-    return loadConfig(allocator, options) catch null;
+) ?types.ConfigResult(T) {
+    return loadConfig(T, allocator, options) catch null;
 }
 
-test "loadConfig returns defaults when no file found" {
+test "loadConfig returns typed defaults when no file found" {
     const allocator = std.testing.allocator;
+
+    const TestConfig = struct {
+        key: []const u8,
+        port: u16 = 8080,
+    };
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -155,41 +194,49 @@ test "loadConfig returns defaults when no file found" {
     const cwd = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(cwd);
 
-    // Create defaults with proper ownership
+    // Create defaults
     var defaults_obj = std.json.ObjectMap.init(allocator);
     defer defaults_obj.deinit();
     try defaults_obj.put("key", .{ .string = "value" });
+    try defaults_obj.put("port", .{ .integer = 3000 });
 
-    var result = try loadConfig(allocator, .{
+    var result = try loadConfig(TestConfig, allocator, .{
         .name = "nonexistent",
         .cwd = cwd,
         .defaults = .{ .object = defaults_obj },
     });
-    defer result.deinit();
+    defer result.deinit(allocator);
 
     try std.testing.expectEqual(types.ConfigSource.defaults, result.source);
-    try std.testing.expect(result.config.object.get("key") != null);
+    try std.testing.expectEqualStrings("value", result.value.key);
+    try std.testing.expectEqual(@as(u16, 3000), result.value.port);
 }
 
-test "loadConfig loads from file" {
+test "loadConfig loads typed config from file" {
     const allocator = std.testing.allocator;
+
+    const TestConfig = struct {
+        loaded: bool,
+        count: ?i32 = null,
+    };
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const file = try tmp.dir.createFile("test.json", .{});
     defer file.close();
-    try file.writeAll("{\"loaded\": true}");
+    try file.writeAll("{\"loaded\": true, \"count\": 42}");
 
     const cwd = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(cwd);
 
-    var result = try loadConfig(allocator, .{
+    var result = try loadConfig(TestConfig, allocator, .{
         .name = "test",
         .cwd = cwd,
     });
-    defer result.deinit();
+    defer result.deinit(allocator);
 
     try std.testing.expectEqual(types.ConfigSource.file_local, result.source);
-    try std.testing.expect(result.config.object.get("loaded") != null);
+    try std.testing.expectEqual(true, result.value.loaded);
+    try std.testing.expectEqual(@as(i32, 42), result.value.count.?);
 }

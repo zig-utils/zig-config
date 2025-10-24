@@ -1,27 +1,25 @@
 const std = @import("std");
 const zig_config = @import("zig-config");
 
+// Define your configuration structure with type safety!
+const AppConfig = struct {
+    app_name: []const u8 = "My Application",
+    port: u16 = 8080,
+    debug: bool = false,
+    max_connections: u32 = 100,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create some defaults
-    var defaults = std.json.ObjectMap.init(allocator);
-    defer defaults.deinit();
-    
-    try defaults.put("app_name", .{ .string = try allocator.dupe(u8, "My Application") });
-    try defaults.put("port", .{ .integer = 8080 });
-    try defaults.put("debug", .{ .bool = false });
-    try defaults.put("max_connections", .{ .integer = 100 });
-
-    // Load configuration
-    var config = try zig_config.loadConfig(allocator, .{
+    // Load configuration with full type safety
+    var config = try zig_config.loadConfig(AppConfig, allocator, .{
         .name = "example",
-        .defaults = .{ .object = defaults },
         .env_prefix = "EXAMPLE",
     });
-    defer config.deinit();
+    defer config.deinit(allocator);
 
     // Display configuration source
     std.debug.print("Configuration loaded from: {s}\n", .{@tagName(config.source)});
@@ -31,24 +29,12 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Display configuration values
+    // Access configuration with full type safety - no runtime type checking!
     std.debug.print("Configuration values:\n", .{});
-    
-    if (config.config.object.get("app_name")) |value| {
-        std.debug.print("  app_name: {s}\n", .{value.string});
-    }
-    
-    if (config.config.object.get("port")) |value| {
-        std.debug.print("  port: {d}\n", .{value.integer});
-    }
-    
-    if (config.config.object.get("debug")) |value| {
-        std.debug.print("  debug: {}\n", .{value.bool});
-    }
-    
-    if (config.config.object.get("max_connections")) |value| {
-        std.debug.print("  max_connections: {d}\n", .{value.integer});
-    }
+    std.debug.print("  app_name: {s}\n", .{config.value.app_name});
+    std.debug.print("  port: {d}\n", .{config.value.port});
+    std.debug.print("  debug: {}\n", .{config.value.debug});
+    std.debug.print("  max_connections: {d}\n", .{config.value.max_connections});
 
     std.debug.print("\nTry setting environment variables:\n", .{});
     std.debug.print("  export EXAMPLE_PORT=3000\n", .{});

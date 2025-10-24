@@ -28,23 +28,34 @@ exe.root_module.addImport("zig-config", zig-config.module("zig-config"));
 
 ```zig
 const std = @import("std");
-const zig-config = @import("zig-config");
+const zig_config = @import("zig-config");
+
+// Define your configuration structure with full type safety!
+const AppConfig = struct {
+    port: u16 = 8080,
+    debug: bool = false,
+    database: struct {
+        host: []const u8 = "localhost",
+        port: u16 = 5432,
+    } = .{},
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Load configuration
-    var config = try zig-config.loadConfig(allocator, .{
+    // Load configuration with compile-time type checking
+    var config = try zig_config.loadConfig(AppConfig, allocator, .{
         .name = "myapp",
     });
-    defer config.deinit();
+    defer config.deinit(allocator);
 
-    // Access values
-    const port = config.config.object.get("port").?.integer;
-    const debug = config.config.object.get("debug").?.bool;
-    
+    // Access values with full type safety - no runtime type checking needed!
+    const port: u16 = config.value.port;           // Compile-time type safe!
+    const debug: bool = config.value.debug;         // IDE autocomplete works!
+    const db_host = config.value.database.host;     // Nested structs supported!
+
     std.debug.print("Server running on port {d}\n", .{port});
 }
 ```
@@ -94,53 +105,103 @@ Examples:
 - `api-key` → `MYAPP_API_KEY`
 - `cache.ttl-seconds` → `MYAPP_CACHE_TTL_SECONDS`
 
-## Examples
+## Type Safety Features
 
-### With Defaults
+### ✅ Compile-Time Type Checking
+- **No runtime type errors** - all types validated at compile time
+- **IDE autocomplete** - full IntelliSense support for config fields
+- **Default values** - define defaults directly in your struct
+- **Optional fields** - use `?T` for optional configuration
+- **Nested structures** - full support for complex nested configs
+
+### Example with All Features
 
 ```zig
-const zig-config = @import("zig-config");
+const Config = struct {
+    // Required fields (no default)
+    app_name: []const u8,
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Optional fields
+    api_key: ?[]const u8 = null,
 
-    // Create defaults
-    var defaults = std.json.ObjectMap.init(allocator);
-    defer defaults.deinit();
-    try defaults.put("port", .{ .integer = 8080 });
-    try defaults.put("debug", .{ .bool = false });
+    // Fields with defaults
+    port: u16 = 8080,
+    debug: bool = false,
 
-    var config = try zig-config.loadConfig(allocator, .{
-        .name = "server",
-        .defaults = .{ .object = defaults },
-    });
-    defer config.deinit();
+    // Nested structures
+    database: struct {
+        host: []const u8 = "localhost",
+        port: u16 = 5432,
+        pool_size: u32 = 10,
+    } = .{},
 
-    // Defaults are overridden by files and env vars
-    const port = config.config.object.get("port").?.integer;
-}
+    // Arrays
+    allowed_hosts: [][]const u8 = &.{},
+
+    // Complex types
+    timeouts: struct {
+        connect_ms: u32 = 5000,
+        read_ms: u32 = 30000,
+    } = .{},
+};
+
+var config = try zig_config.loadConfig(Config, allocator, .{
+    .name = "myapp",
+});
+defer config.deinit(allocator);
+
+// All fields are type-safe!
+std.debug.print("App: {s}, Port: {d}\n", .{
+    config.value.app_name,
+    config.value.port,
+});
+```
+
+## Examples
+
+### Basic Usage (Minimal Example)
+
+```zig
+const Config = struct {
+    port: u16 = 8080,
+    debug: bool = false,
+};
+
+var config = try zig_config.loadConfig(Config, allocator, .{
+    .name = "myapp",
+});
+defer config.deinit(allocator);
+
+// Fully typed access!
+const port: u16 = config.value.port;
 ```
 
 ### Custom Working Directory
 
 ```zig
-var config = try zig-config.loadConfig(allocator, .{
+const Config = struct {
+    port: u16 = 8080,
+};
+
+var config = try zig_config.loadConfig(Config, allocator, .{
     .name = "myapp",
     .cwd = "/path/to/project",
 });
-defer config.deinit();
+defer config.deinit(allocator);
 ```
 
 ### Custom Environment Prefix
 
 ```zig
-var config = try zig-config.loadConfig(allocator, .{
+const Config = struct {
+    port: u16 = 8080,
+};
+
+var config = try zig_config.loadConfig(Config, allocator, .{
     .name = "myapp",
     .env_prefix = "CUSTOM",  // Uses CUSTOM_* instead of MYAPP_*
 });
-defer config.deinit();
+defer config.deinit(allocator);
 ```
 
 ### Deep Merging

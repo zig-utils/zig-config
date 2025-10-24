@@ -18,6 +18,7 @@ pub const ConfigSource = types.ConfigSource;
 pub const MergeStrategy = types.MergeStrategy;
 pub const LoadOptions = types.LoadOptions;
 pub const ConfigResult = types.ConfigResult;
+pub const UntypedConfigResult = types.UntypedConfigResult;
 pub const SourceInfo = types.SourceInfo;
 pub const MergeOptions = types.MergeOptions;
 
@@ -35,7 +36,11 @@ test "zig-config exports" {
     try testing.expect(@TypeOf(ZigConfigError) == type);
     try testing.expect(@TypeOf(ConfigSource) == type);
     try testing.expect(@TypeOf(MergeStrategy) == type);
-    try testing.expect(@TypeOf(loadConfig) == @TypeOf(config_loader.loadConfig));
+
+    // ConfigResult is now a function that returns a type
+    const TestConfig = struct { value: i32 };
+    const ResultType = ConfigResult(TestConfig);
+    try testing.expect(@TypeOf(ResultType) == type);
 }
 
 test {
