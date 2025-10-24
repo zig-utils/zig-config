@@ -59,8 +59,8 @@ pub const FileLoader = struct {
     ) !std.json.Value {
         const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
             return switch (err) {
-                error.FileNotFound => errors.ZonfigError.ConfigFileNotFound,
-                error.AccessDenied => errors.ZonfigError.ConfigFilePermissionDenied,
+                error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
+                error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                 else => err,
             };
         };
@@ -68,8 +68,8 @@ pub const FileLoader = struct {
 
         const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
             return switch (err) {
-                error.AccessDenied => errors.ZonfigError.ConfigFilePermissionDenied,
-                else => errors.ZonfigError.ConfigFileInvalid,
+                error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
+                else => errors.ZigConfigError.ConfigFileInvalid,
             };
         };
         defer self.allocator.free(content);
@@ -81,7 +81,7 @@ pub const FileLoader = struct {
             content,
             .{},
         ) catch {
-            return errors.ZonfigError.ConfigFileSyntaxError;
+            return errors.ZigConfigError.ConfigFileSyntaxError;
         };
 
         return parsed.value;

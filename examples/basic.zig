@@ -1,5 +1,5 @@
 const std = @import("std");
-const zonfig = @import("zonfig");
+const zig_config = @import("zig-config");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -16,7 +16,7 @@ pub fn main() !void {
     try defaults.put("max_connections", .{ .integer = 100 });
 
     // Load configuration
-    var config = try zonfig.loadConfig(allocator, .{
+    var config = try zig_config.loadConfig(allocator, .{
         .name = "example",
         .defaults = .{ .object = defaults },
         .env_prefix = "EXAMPLE",

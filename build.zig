@@ -5,8 +5,8 @@ pub fn build(b: *std.Build) void {
     _ = b.standardOptimizeOption(.{});
 
     // Library module
-    const lib_mod = b.addModule("zonfig", .{
-        .root_source_file = b.path("src/zonfig.zig"),
+    const lib_mod = b.addModule("zig-config", .{
+        .root_source_file = b.path("src/zig-config.zig"),
         .target = target,
     });
 
@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) void {
     //         .target = target,
     //         .optimize = optimize,
     //     });
-    //     test_exe.root_module.addImport("zonfig", zonfig_module);
+    //     test_exe.root_module.addImport("zig-config", zig_config_module);
     //
     //     const run_test = b.addRunArtifact(test_exe);
     //     test_step.dependOn(&run_test.step);

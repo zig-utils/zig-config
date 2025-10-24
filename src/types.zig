@@ -129,7 +129,7 @@ pub const MergeOptions = struct {
 
 test "ConfigSource enum values" {
     try std.testing.expect(@intFromEnum(ConfigSource.file_local) == 0);
-    try std.testing.expect(@intFromEnum(ConfigSource.defaults) == 4);
+    try std.testing.expect(@intFromEnum(ConfigSource.defaults) == 5);
 }
 
 test "MergeStrategy enum values" {

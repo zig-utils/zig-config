@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("../errors.zig");
+const utils = @import("../utils.zig");
 
 /// Environment variable processor with type-aware parsing
 pub const EnvProcessor = struct {
@@ -43,7 +44,7 @@ pub const EnvProcessor = struct {
                 try result.put(try self.allocator.dupe(u8, key), nested);
             } else {
                 // Keep original value
-                try result.put(try self.allocator.dupe(u8, key), try self.cloneValue(value));
+                try result.put(try self.allocator.dupe(u8, key), try utils.cloneJsonValue(self.allocator, value));
             }
         }
 
@@ -162,30 +163,6 @@ pub const EnvProcessor = struct {
             std.mem.eql(u8, lower, "yes");
     }
 
-    fn cloneValue(self: *EnvProcessor, value: std.json.Value) !std.json.Value {
-        return switch (value) {
-            .null, .bool, .integer, .float, .number_string => value,
-            .string => |s| .{ .string = try self.allocator.dupe(u8, s) },
-            .array => |arr| {
-                const items = try self.allocator.alloc(std.json.Value, arr.items.len);
-                for (arr.items, 0..) |item, i| {
-                    items[i] = try self.cloneValue(item);
-                }
-                return .{ .array = std.json.Array.fromOwnedSlice(self.allocator, items) };
-            },
-            .object => |obj| {
-                var new_obj = std.json.ObjectMap.init(self.allocator);
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    try new_obj.put(
-                        try self.allocator.dupe(u8, entry.key_ptr.*),
-                        try self.cloneValue(entry.value_ptr.*),
-                    );
-                }
-                return .{ .object = new_obj };
-            },
-        };
-    }
 };
 
 test "EnvProcessor.parseEnvValue parses boolean" {

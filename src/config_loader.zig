@@ -4,6 +4,7 @@ const errors = @import("errors.zig");
 const FileLoader = @import("services/file_loader.zig").FileLoader;
 const EnvProcessor = @import("services/env_processor.zig").EnvProcessor;
 const merge = @import("merge.zig");
+const utils = @import("utils.zig");
 
 /// Configuration loader orchestrator
 pub const ConfigLoader = struct {
@@ -27,11 +28,15 @@ pub const ConfigLoader = struct {
         var sources = try std.ArrayList(types.SourceInfo).initCapacity(self.allocator, 4);
         defer sources.deinit(self.allocator);
 
-        // Determine CWD
-        const cwd = options.cwd orelse blk: {
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
-            break :blk try std.fs.cwd().realpath(".", &buf);
-        };
+        // Determine CWD - allocate if not provided
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd_from_fs = if (options.cwd == null) blk: {
+            const path = try std.fs.cwd().realpath(".", &cwd_buf);
+            break :blk try self.allocator.dupe(u8, path);
+        } else null;
+        defer if (cwd_from_fs) |path| self.allocator.free(path);
+
+        const cwd = options.cwd orelse cwd_from_fs.?;
 
         var final_config: ?std.json.Value = null;
         var primary_source: types.ConfigSource = .defaults;
@@ -62,7 +67,7 @@ pub const ConfigLoader = struct {
 
         // Apply defaults if no file found
         if (final_config == null and options.defaults != null) {
-            final_config = try merge.cloneValue(self.allocator, options.defaults.?);
+            final_config = try utils.cloneJsonValue(self.allocator, options.defaults.?);
             primary_source = .defaults;
             try sources.append(self.allocator, types.SourceInfo{
                 .source = .defaults,
@@ -119,11 +124,8 @@ pub const ConfigLoader = struct {
 
     fn configsAreDifferent(self: *ConfigLoader, a: std.json.Value, b: std.json.Value) !bool {
         _ = self;
-        // Simple implementation: assume they're different if env vars were applied
-        // A more thorough implementation would deep compare the values
-        const a_tag = std.meta.activeTag(a);
-        const b_tag = std.meta.activeTag(b);
-        return a_tag != b_tag;
+        // Use deep equality comparison from utils
+        return !utils.jsonValuesEqual(a, b);
     }
 };
 
@@ -155,8 +157,8 @@ test "loadConfig returns defaults when no file found" {
 
     // Create defaults with proper ownership
     var defaults_obj = std.json.ObjectMap.init(allocator);
-    const default_string = try allocator.dupe(u8, "value");
-    try defaults_obj.put("key", .{ .string = default_string });
+    defer defaults_obj.deinit();
+    try defaults_obj.put("key", .{ .string = "value" });
 
     var result = try loadConfig(allocator, .{
         .name = "nonexistent",
@@ -164,11 +166,6 @@ test "loadConfig returns defaults when no file found" {
         .defaults = .{ .object = defaults_obj },
     });
     defer result.deinit();
-
-    // Clean up the original defaults_obj after result is created
-    // The string is now owned by result (cloned), so we need to free the original
-    allocator.free(default_string);
-    defaults_obj.deinit();
 
     try std.testing.expectEqual(types.ConfigSource.defaults, result.source);
     try std.testing.expect(result.config.object.get("key") != null);

@@ -1,4 +1,4 @@
-# Zonfig
+# ZigConfig
 
 A zero-dependency configuration loader for Zig, inspired by [bunfig](https://github.com/stacksjs/bunfig).
 
@@ -13,22 +13,22 @@ A zero-dependency configuration loader for Zig, inspired by [bunfig](https://git
 
 ## Installation
 
-Add zonfig as a dependency in your `build.zig`:
+Add zig-config as a dependency in your `build.zig`:
 
 ```zig
-const zonfig = b.dependency("zonfig", .{
+const zig-config = b.dependency("zig-config", .{
     .target = target,
     .optimize = optimize,
 });
 
-exe.root_module.addImport("zonfig", zonfig.module("zonfig"));
+exe.root_module.addImport("zig-config", zig-config.module("zig-config"));
 ```
 
 ## Quick Start
 
 ```zig
 const std = @import("std");
-const zonfig = @import("zonfig");
+const zig-config = @import("zig-config");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -36,7 +36,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Load configuration
-    var config = try zonfig.loadConfig(allocator, .{
+    var config = try zig-config.loadConfig(allocator, .{
         .name = "myapp",
     });
     defer config.deinit();
@@ -51,7 +51,7 @@ pub fn main() !void {
 
 ## Configuration Sources
 
-Zonfig loads configuration from multiple sources with the following priority (highest to lowest):
+ZigConfig loads configuration from multiple sources with the following priority (highest to lowest):
 
 1. **Environment variables** (highest priority)
 2. **Local project file** (`./myapp.json`, `./config/myapp.json`, `./.config/myapp.json`)
@@ -99,7 +99,7 @@ Examples:
 ### With Defaults
 
 ```zig
-const zonfig = @import("zonfig");
+const zig-config = @import("zig-config");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -112,7 +112,7 @@ pub fn main() !void {
     try defaults.put("port", .{ .integer = 8080 });
     try defaults.put("debug", .{ .bool = false });
 
-    var config = try zonfig.loadConfig(allocator, .{
+    var config = try zig-config.loadConfig(allocator, .{
         .name = "server",
         .defaults = .{ .object = defaults },
     });
@@ -126,7 +126,7 @@ pub fn main() !void {
 ### Custom Working Directory
 
 ```zig
-var config = try zonfig.loadConfig(allocator, .{
+var config = try zig-config.loadConfig(allocator, .{
     .name = "myapp",
     .cwd = "/path/to/project",
 });
@@ -136,7 +136,7 @@ defer config.deinit();
 ### Custom Environment Prefix
 
 ```zig
-var config = try zonfig.loadConfig(allocator, .{
+var config = try zig-config.loadConfig(allocator, .{
     .name = "myapp",
     .env_prefix = "CUSTOM",  // Uses CUSTOM_* instead of MYAPP_*
 });
@@ -146,7 +146,7 @@ defer config.deinit();
 ### Deep Merging
 
 ```zig
-const zonfig = @import("zonfig");
+const zig-config = @import("zig-config");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -161,7 +161,7 @@ pub fn main() !void {
     defer source.deinit();
     try source.put("b", .{ .integer = 2 });
 
-    const merged = try zonfig.deepMerge(
+    const merged = try zig-config.deepMerge(
         allocator,
         .{ .object = target },
         .{ .object = source },
@@ -220,7 +220,7 @@ pub const ConfigResult = struct {
 
 ## File Discovery
 
-Zonfig searches for configuration files in this order:
+ZigConfig searches for configuration files in this order:
 
 1. Project root: `./myapp.json`, `./myapp.zig`
 2. Config directory: `./config/myapp.json`, `./config/myapp.zig`
@@ -231,10 +231,10 @@ Extension priority: `.json` > `.zig`
 
 ## Error Handling
 
-Zonfig provides detailed error types:
+ZigConfig provides detailed error types:
 
 ```zig
-pub const ZonfigError = error{
+pub const ZigConfigError = error{
     ConfigFileNotFound,
     ConfigFileInvalid,
     ConfigFilePermissionDenied,
@@ -251,7 +251,7 @@ pub const ZonfigError = error{
 Example error handling:
 
 ```zig
-const config = zonfig.loadConfig(allocator, .{
+const config = zig-config.loadConfig(allocator, .{
     .name = "myapp",
 }) catch |err| switch (err) {
     error.ConfigFileNotFound => {

@@ -1,8 +1,9 @@
 const std = @import("std");
 const types = @import("types.zig");
 const errors = @import("errors.zig");
+const utils = @import("utils.zig");
 
-const MergeError = std.mem.Allocator.Error || errors.ZonfigError;
+const MergeError = std.mem.Allocator.Error || errors.ZigConfigError;
 
 /// Deep merge two JSON values
 pub fn deepMerge(
@@ -29,7 +30,7 @@ fn deepMergeImpl(
     const source_tag = std.meta.activeTag(source);
 
     if (target_tag != source_tag) {
-        return try cloneValue(allocator, source);
+        return try utils.cloneJsonValue(allocator, source);
     }
 
     switch (source) {
@@ -39,7 +40,7 @@ fn deepMergeImpl(
             // Circular reference check
             const addr = @intFromPtr(&target_obj);
             if (visited.get(addr)) |_| {
-                return errors.ZonfigError.CircularReferenceDetected;
+                return errors.ZigConfigError.CircularReferenceDetected;
             }
             try visited.put(addr, {});
             defer _ = visited.remove(addr);
@@ -52,7 +53,7 @@ fn deepMergeImpl(
             while (target_iter.next()) |entry| {
                 try result.put(
                     try allocator.dupe(u8, entry.key_ptr.*),
-                    try cloneValue(allocator, entry.value_ptr.*),
+                    try utils.cloneJsonValue(allocator, entry.value_ptr.*),
                 );
             }
 
@@ -73,7 +74,7 @@ fn deepMergeImpl(
                     // Add new key
                     try result.put(
                         try allocator.dupe(u8, entry.key_ptr.*),
-                        try cloneValue(allocator, entry.value_ptr.*),
+                        try utils.cloneJsonValue(allocator, entry.value_ptr.*),
                     );
                 }
             }
@@ -94,7 +95,7 @@ fn deepMergeImpl(
 
         else => {
             // Primitives: source wins
-            return try cloneValue(allocator, source);
+            return try utils.cloneJsonValue(allocator, source);
         },
     }
 }
@@ -115,7 +116,7 @@ fn mergeArrays(
 fn cloneArray(allocator: std.mem.Allocator, arr: []std.json.Value) ![]std.json.Value {
     var result = try std.ArrayList(std.json.Value).initCapacity(allocator, arr.len);
     for (arr) |item| {
-        try result.append(allocator, try cloneValue(allocator, item));
+        try result.append(allocator, try utils.cloneJsonValue(allocator, item));
     }
     return try result.toOwnedSlice(allocator);
 }
@@ -129,7 +130,7 @@ fn concatArrays(
 
     // Add all target items
     for (target) |item| {
-        try result.append(allocator, try cloneValue(allocator, item));
+        try result.append(allocator, try utils.cloneJsonValue(allocator, item));
     }
 
     // Add source items (deduplicate if same value)
@@ -142,7 +143,7 @@ fn concatArrays(
             }
         }
         if (!found) {
-            try result.append(allocator, try cloneValue(allocator, item));
+            try result.append(allocator, try utils.cloneJsonValue(allocator, item));
         }
     }
 
@@ -172,7 +173,7 @@ fn smartMergeArrays(
     for (target, 0..) |item, i| {
         const key_value = item.object.get(merge_key).?.string;
         try seen.put(key_value, i);
-        try result.append(allocator, try cloneValue(allocator, item));
+        try result.append(allocator, try utils.cloneJsonValue(allocator, item));
     }
 
     // Merge or add source items
@@ -195,7 +196,7 @@ fn smartMergeArrays(
         } else {
             // Add new item
             try seen.put(key_value, result.items.len);
-            try result.append(allocator, try cloneValue(allocator, source_item));
+            try result.append(allocator, try utils.cloneJsonValue(allocator, source_item));
         }
     }
 
@@ -237,31 +238,6 @@ fn valuesEqual(a: std.json.Value, b: std.json.Value) !bool {
         .string => |val| std.mem.eql(u8, val, b.string),
         .array => false, // Arrays not compared for dedup
         .object => false, // Objects not compared for dedup
-    };
-}
-
-pub fn cloneValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
-    return switch (value) {
-        .null, .bool, .integer, .float, .number_string => value,
-        .string => |s| .{ .string = try allocator.dupe(u8, s) },
-        .array => |arr| {
-            const items = try allocator.alloc(std.json.Value, arr.items.len);
-            for (arr.items, 0..) |item, i| {
-                items[i] = try cloneValue(allocator, item);
-            }
-            return .{ .array = std.json.Array.fromOwnedSlice(allocator, items) };
-        },
-        .object => |obj| {
-            var new_obj = std.json.ObjectMap.init(allocator);
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                try new_obj.put(
-                    try allocator.dupe(u8, entry.key_ptr.*),
-                    try cloneValue(allocator, entry.value_ptr.*),
-                );
-            }
-            return .{ .object = new_obj };
-        },
     };
 }
 
@@ -318,4 +294,184 @@ test "deepMerge replace strategy replaces arrays" {
     try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
     try std.testing.expectEqual(@as(i64, 3), result.array.items[0].integer);
     try std.testing.expectEqual(@as(i64, 4), result.array.items[1].integer);
+}
+
+test "deepMerge handles nested objects correctly" {
+    const allocator = std.testing.allocator;
+
+    // Create nested target object
+    var target_inner = std.json.ObjectMap.init(allocator);
+    defer target_inner.deinit();
+    try target_inner.put("value", .{ .integer = 1 });
+
+    var target_obj = std.json.ObjectMap.init(allocator);
+    defer target_obj.deinit();
+    try target_obj.put("inner", .{ .object = target_inner });
+
+    const target = std.json.Value{ .object = target_obj };
+
+    // Create nested source object
+    var source_inner = std.json.ObjectMap.init(allocator);
+    defer source_inner.deinit();
+    try source_inner.put("value", .{ .integer = 2 });
+
+    var source_obj = std.json.ObjectMap.init(allocator);
+    defer source_obj.deinit();
+    try source_obj.put("inner", .{ .object = source_inner });
+
+    const source = std.json.Value{ .object = source_obj };
+
+    // Merge should handle nested objects properly
+    const result = try deepMerge(allocator, target, source, .{});
+    defer {
+        var iter = result.object.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.* == .object) {
+                var inner_iter = entry.value_ptr.*.object.iterator();
+                while (inner_iter.next()) |inner_entry| {
+                    allocator.free(inner_entry.key_ptr.*);
+                }
+                var mutable_inner = entry.value_ptr.*.object;
+                mutable_inner.deinit();
+            }
+        }
+        var mutable_obj = result.object;
+        mutable_obj.deinit();
+    }
+
+    const inner_result = result.object.get("inner").?.object;
+    try std.testing.expectEqual(@as(i64, 2), inner_result.get("value").?.integer);
+}
+
+test "deepMerge concat strategy deduplicates arrays" {
+    const allocator = std.testing.allocator;
+
+    const target_items = try allocator.alloc(std.json.Value, 2);
+    target_items[0] = .{ .integer = 1 };
+    target_items[1] = .{ .integer = 2 };
+    const target = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, target_items) };
+    defer target.array.deinit();
+
+    const source_items = try allocator.alloc(std.json.Value, 3);
+    source_items[0] = .{ .integer = 2 }; // Duplicate
+    source_items[1] = .{ .integer = 3 };
+    source_items[2] = .{ .integer = 4 };
+    const source = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, source_items) };
+    defer source.array.deinit();
+
+    const result = try deepMerge(allocator, target, source, .{ .strategy = .concat });
+    defer {
+        for (result.array.items) |item| {
+            if (item == .string) allocator.free(item.string);
+        }
+        allocator.free(result.array.items);
+    }
+
+    // Should have 4 items: 1, 2, 3, 4 (2 is deduplicated)
+    try std.testing.expectEqual(@as(usize, 4), result.array.items.len);
+    try std.testing.expectEqual(@as(i64, 1), result.array.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), result.array.items[1].integer);
+    try std.testing.expectEqual(@as(i64, 3), result.array.items[2].integer);
+    try std.testing.expectEqual(@as(i64, 4), result.array.items[3].integer);
+}
+
+test "smartMerge handles empty arrays" {
+    const allocator = std.testing.allocator;
+
+    const target_items = try allocator.alloc(std.json.Value, 0);
+    const target = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, target_items) };
+    defer target.array.deinit();
+
+    const source_items = try allocator.alloc(std.json.Value, 1);
+    source_items[0] = .{ .integer = 1 };
+    const source = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, source_items) };
+    defer source.array.deinit();
+
+    const result = try deepMerge(allocator, target, source, .{ .strategy = .smart });
+    defer allocator.free(result.array.items);
+
+    try std.testing.expectEqual(@as(usize, 1), result.array.items.len);
+    try std.testing.expectEqual(@as(i64, 1), result.array.items[0].integer);
+}
+
+test "smartMerge merges object arrays by id" {
+    const allocator = std.testing.allocator;
+
+    // Create target array with one object
+    var target_obj1 = std.json.ObjectMap.init(allocator);
+    defer target_obj1.deinit();
+    try target_obj1.put("id", .{ .string = "1" });
+    try target_obj1.put("value", .{ .integer = 100 });
+
+    const target_items = try allocator.alloc(std.json.Value, 1);
+    target_items[0] = .{ .object = target_obj1 };
+    const target = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, target_items) };
+    defer target.array.deinit();
+
+    // Create source array with overlapping and new object
+    var source_obj1 = std.json.ObjectMap.init(allocator);
+    defer source_obj1.deinit();
+    try source_obj1.put("id", .{ .string = "1" });
+    try source_obj1.put("value", .{ .integer = 200 }); // Override
+
+    var source_obj2 = std.json.ObjectMap.init(allocator);
+    defer source_obj2.deinit();
+    try source_obj2.put("id", .{ .string = "2" });
+    try source_obj2.put("value", .{ .integer = 300 });
+
+    const source_items = try allocator.alloc(std.json.Value, 2);
+    source_items[0] = .{ .object = source_obj1 };
+    source_items[1] = .{ .object = source_obj2 };
+    const source = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, source_items) };
+    defer source.array.deinit();
+
+    const result = try deepMerge(allocator, target, source, .{ .strategy = .smart });
+    defer {
+        for (result.array.items) |item| {
+            var iter = item.object.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                if (entry.value_ptr.* == .string) {
+                    allocator.free(entry.value_ptr.*.string);
+                }
+            }
+            var mutable_obj = item.object;
+            mutable_obj.deinit();
+        }
+        allocator.free(result.array.items);
+    }
+
+    // Should have 2 items: merged first object and new second object
+    try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
+
+    const first = result.array.items[0].object;
+    try std.testing.expectEqualStrings("1", first.get("id").?.string);
+    try std.testing.expectEqual(@as(i64, 200), first.get("value").?.integer); // Merged value
+
+    const second = result.array.items[1].object;
+    try std.testing.expectEqualStrings("2", second.get("id").?.string);
+    try std.testing.expectEqual(@as(i64, 300), second.get("value").?.integer);
+}
+
+test "smartMerge falls back to concat for non-object arrays" {
+    const allocator = std.testing.allocator;
+
+    const target_items = try allocator.alloc(std.json.Value, 2);
+    target_items[0] = .{ .integer = 1 };
+    target_items[1] = .{ .integer = 2 };
+    const target = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, target_items) };
+    defer target.array.deinit();
+
+    const source_items = try allocator.alloc(std.json.Value, 2);
+    source_items[0] = .{ .integer = 3 };
+    source_items[1] = .{ .integer = 4 };
+    const source = std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, source_items) };
+    defer source.array.deinit();
+
+    const result = try deepMerge(allocator, target, source, .{ .strategy = .smart });
+    defer allocator.free(result.array.items);
+
+    // Should concatenate like concat strategy
+    try std.testing.expectEqual(@as(usize, 4), result.array.items.len);
 }

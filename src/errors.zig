@@ -1,7 +1,7 @@
 const std = @import("std");
 
-/// Zonfig error types
-pub const ZonfigError = error{
+/// zig-config error types
+pub const ZigConfigError = error{
     // File errors
     ConfigFileNotFound,
     ConfigFileInvalid,
@@ -42,7 +42,7 @@ pub const ErrorInfo = struct {
 /// Create error info from error type
 pub fn createError(
     allocator: std.mem.Allocator,
-    err: ZonfigError,
+    err: ZigConfigError,
     context: ?[]const u8,
 ) !ErrorInfo {
     const code = try allocator.dupe(u8, @errorName(err));
@@ -58,7 +58,7 @@ pub fn createError(
 }
 
 /// Get human-readable error message
-pub fn getErrorMessage(err: ZonfigError) []const u8 {
+pub fn getErrorMessage(err: ZigConfigError) []const u8 {
     return switch (err) {
         error.ConfigFileNotFound => "Configuration file not found",
         error.ConfigFileInvalid => "Configuration file is invalid",
@@ -74,7 +74,7 @@ pub fn getErrorMessage(err: ZonfigError) []const u8 {
 }
 
 /// Check if error is retryable
-pub fn isRetryable(err: ZonfigError) bool {
+pub fn isRetryable(err: ZigConfigError) bool {
     return switch (err) {
         error.ConfigFileNotFound => false,
         error.ConfigFileInvalid => false,
