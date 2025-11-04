@@ -60,16 +60,24 @@ fn deepMergeImpl(
             // Merge/add source keys
             var source_iter = source_obj.iterator();
             while (source_iter.next()) |entry| {
-                if (result.get(entry.key_ptr.*)) |target_value| {
+                if (result.getPtr(entry.key_ptr.*)) |target_value_ptr| {
+                    // Save the old value
+                    const old_value = target_value_ptr.*;
+
                     // Recursive merge
                     const merged = try deepMergeImpl(
                         allocator,
-                        target_value,
+                        old_value,
                         entry.value_ptr.*,
                         options,
                         visited,
                     );
-                    try result.put(try allocator.dupe(u8, entry.key_ptr.*), merged);
+
+                    // Replace with merged value
+                    target_value_ptr.* = merged;
+
+                    // Free the old value after replacement
+                    utils.freeJsonValue(allocator, old_value);
                 } else {
                     // Add new key
                     try result.put(
@@ -185,14 +193,22 @@ fn smartMergeArrays(
             var visited = std.AutoHashMap(usize, void).init(allocator);
             defer visited.deinit();
 
+            // Save the old value
+            const old_value = result.items[target_idx];
+
             const merged = try deepMergeImpl(
                 allocator,
-                result.items[target_idx],
+                old_value,
                 source_item,
                 .{ .strategy = .smart },
                 &visited,
             );
+
+            // Replace with merged value
             result.items[target_idx] = merged;
+
+            // Free the old value after replacement
+            utils.freeJsonValue(allocator, old_value);
         } else {
             // Add new item
             try seen.put(key_value, result.items.len);
@@ -259,13 +275,8 @@ test "deepMerge merges simple objects" {
 
     const result = try deepMerge(allocator, target, source, .{});
     defer {
-        // Properly free the merged result
-        var iter = result.object.iterator();
-        while (iter.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-        }
-        var mutable_obj = result.object;
-        mutable_obj.deinit();
+        // Use freeJsonValue to properly free all nested allocations
+        utils.freeJsonValue(allocator, result);
     }
 
     try std.testing.expectEqual(@as(i64, 1), result.object.get("a").?.integer);
@@ -324,20 +335,8 @@ test "deepMerge handles nested objects correctly" {
     // Merge should handle nested objects properly
     const result = try deepMerge(allocator, target, source, .{});
     defer {
-        var iter = result.object.iterator();
-        while (iter.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            if (entry.value_ptr.* == .object) {
-                var inner_iter = entry.value_ptr.*.object.iterator();
-                while (inner_iter.next()) |inner_entry| {
-                    allocator.free(inner_entry.key_ptr.*);
-                }
-                var mutable_inner = entry.value_ptr.*.object;
-                mutable_inner.deinit();
-            }
-        }
-        var mutable_obj = result.object;
-        mutable_obj.deinit();
+        // Use freeJsonValue to properly free all nested allocations
+        utils.freeJsonValue(allocator, result);
     }
 
     const inner_result = result.object.get("inner").?.object;
@@ -428,18 +427,8 @@ test "smartMerge merges object arrays by id" {
 
     const result = try deepMerge(allocator, target, source, .{ .strategy = .smart });
     defer {
-        for (result.array.items) |item| {
-            var iter = item.object.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                if (entry.value_ptr.* == .string) {
-                    allocator.free(entry.value_ptr.*.string);
-                }
-            }
-            var mutable_obj = item.object;
-            mutable_obj.deinit();
-        }
-        allocator.free(result.array.items);
+        // Use freeJsonValue to properly free all nested allocations
+        utils.freeJsonValue(allocator, result);
     }
 
     // Should have 2 items: merged first object and new second object

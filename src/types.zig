@@ -116,13 +116,19 @@ pub const UntypedConfigResult = struct {
     /// Parsed JSON data (if loaded from JSON file)
     parsed_json: ?std.json.Parsed(std.json.Value) = null,
 
+    /// Whether config was modified after parsing (e.g., by env vars)
+    config_was_modified: bool = false,
+
     pub fn deinit(self: *UntypedConfigResult) void {
-        // If we have parsed JSON data, free it first
+        const utils = @import("utils.zig");
+
+        // The config field always comes from applyEnvVars which creates new allocations
+        // So we always need to free it
+        utils.freeJsonValue(self.allocator, self.config);
+
+        // If we have parsed JSON data, also free the arena
         if (self.parsed_json) |*parsed| {
             parsed.deinit();
-        } else {
-            // Otherwise, recursively free config value manually
-            freeJsonValue(self.allocator, self.config);
         }
 
         // Free sources
@@ -130,33 +136,6 @@ pub const UntypedConfigResult = struct {
             source.deinit(self.allocator);
         }
         self.allocator.free(self.sources);
-    }
-
-    fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-        switch (value) {
-            .string => |s| allocator.free(s),
-            .array => |arr| {
-                // Recursively free all array items
-                for (arr.items) |item| {
-                    freeJsonValue(allocator, item);
-                }
-                allocator.free(arr.items);
-            },
-            .object => |obj| {
-                // Recursively free all object entries
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    allocator.free(entry.key_ptr.*);
-                    freeJsonValue(allocator, entry.value_ptr.*);
-                }
-                // Free the ObjectMap itself
-                var mutable_obj = obj;
-                mutable_obj.deinit();
-            },
-            else => {
-                // Primitives (null, bool, integer, float, number_string) don't need freeing
-            },
-        }
     }
 
     /// Convert to typed result

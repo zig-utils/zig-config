@@ -71,7 +71,7 @@ pub const EnvProcessor = struct {
 
         // JSON array/object
         if (value.len > 0 and (value[0] == '[' or value[0] == '{')) {
-            const parsed = std.json.parseFromSlice(
+            var parsed = std.json.parseFromSlice(
                 std.json.Value,
                 self.allocator,
                 value,
@@ -80,7 +80,9 @@ pub const EnvProcessor = struct {
                 // If JSON parse fails, treat as string
                 return .{ .string = try self.allocator.dupe(u8, value) };
             };
-            return parsed.value;
+            defer parsed.deinit();
+            // Clone the value before the arena is freed
+            return try utils.cloneJsonValue(self.allocator, parsed.value);
         }
 
         // Comma-separated array

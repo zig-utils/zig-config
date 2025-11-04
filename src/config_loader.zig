@@ -39,15 +39,13 @@ pub const ConfigLoader = struct {
         const cwd = options.cwd orelse cwd_from_fs.?;
 
         var final_config: ?std.json.Value = null;
+        var parsed_json: ?std.json.Parsed(std.json.Value) = null;
         var primary_source: types.ConfigSource = .defaults;
 
         // Try loading from local file
         if (try self.loadFromFile(options.name, cwd)) |parsed| {
-            // Clone the config so we can free the parsed result immediately
-            final_config = try utils.cloneJsonValue(self.allocator, parsed.value);
-            // parsed will be freed when it goes out of scope (errdefer would handle errors)
-            var mutable_parsed = parsed;
-            mutable_parsed.deinit();
+            final_config = parsed.value;
+            parsed_json = parsed;
             primary_source = .file_local;
             try sources.append(self.allocator, types.SourceInfo{
                 .source = .file_local,
@@ -59,10 +57,8 @@ pub const ConfigLoader = struct {
         // Try loading from home directory
         if (final_config == null) {
             if (try self.loadFromHome(options.name)) |parsed| {
-                // Clone the config so we can free the parsed result immediately
-                final_config = try utils.cloneJsonValue(self.allocator, parsed.value);
-                var mutable_parsed = parsed;
-                mutable_parsed.deinit();
+                final_config = parsed.value;
+                parsed_json = parsed;
                 primary_source = .file_home;
                 try sources.append(self.allocator, types.SourceInfo{
                     .source = .file_home,
@@ -93,12 +89,19 @@ pub const ConfigLoader = struct {
         const with_env = try self.env_processor.applyEnvVars(final_config.?, env_prefix);
 
         // Check if env vars made changes
-        if (try self.configsAreDifferent(final_config.?, with_env)) {
+        const config_was_modified = try self.configsAreDifferent(final_config.?, with_env);
+        if (config_was_modified) {
             try sources.append(self.allocator, types.SourceInfo{
                 .source = .env_vars,
                 .path = null,
                 .priority = 1,
             });
+        }
+
+        // Free the original config if it was from defaults or empty object
+        // (arena-allocated configs from parsed_json will be freed separately)
+        if (parsed_json == null) {
+            utils.freeJsonValue(self.allocator, final_config.?);
         }
 
         return types.UntypedConfigResult{
@@ -107,7 +110,8 @@ pub const ConfigLoader = struct {
             .sources = try sources.toOwnedSlice(self.allocator),
             .loaded_at = std.time.timestamp(),
             .allocator = self.allocator,
-            // parsed_json is null - deinit will use manual freeing via freeJsonValue
+            .parsed_json = parsed_json,
+            .config_was_modified = config_was_modified,
         };
     }
 
