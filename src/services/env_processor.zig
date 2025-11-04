@@ -33,8 +33,9 @@ pub const EnvProcessor = struct {
             const env_name = try self.generateEnvName(prefix, &[_][]const u8{key});
             defer self.allocator.free(env_name);
 
-            // Check if env var exists
-            if (std.posix.getenv(env_name)) |env_value| {
+            // Check if env var exists (cross-platform)
+            if (utils.getEnvVar(self.allocator, env_name)) |env_value| {
+                defer self.allocator.free(env_value);
                 // Parse env var value with type awareness
                 const parsed_value = try self.parseEnvValue(env_value);
                 try result.put(try self.allocator.dupe(u8, key), parsed_value);

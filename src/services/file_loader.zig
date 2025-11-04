@@ -1,13 +1,70 @@
 const std = @import("std");
 const types = @import("../types.zig");
 const errors = @import("../errors.zig");
+const utils = @import("../utils.zig");
+
+/// Strip single-line (//) and multi-line (/* */) comments from JSON content
+fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
+    var result = try std.ArrayList(u8).initCapacity(allocator, content.len);
+    errdefer result.deinit(allocator);
+
+    var i: usize = 0;
+    var in_string = false;
+    var escape_next = false;
+
+    while (i < content.len) : (i += 1) {
+        const c = content[i];
+
+        // Handle string literals (comments inside strings should not be stripped)
+        if (c == '"' and !escape_next) {
+            in_string = !in_string;
+            try result.append(allocator, c);
+            continue;
+        }
+
+        if (in_string) {
+            try result.append(allocator, c);
+            escape_next = (c == '\\' and !escape_next);
+            continue;
+        }
+
+        escape_next = false;
+
+        // Check for single-line comment
+        if (c == '/' and i + 1 < content.len and content[i + 1] == '/') {
+            // Skip until end of line
+            i += 2;
+            while (i < content.len and content[i] != '\n') : (i += 1) {}
+            if (i < content.len) try result.append(allocator, '\n'); // Preserve newline
+            continue;
+        }
+
+        // Check for multi-line comment
+        if (c == '/' and i + 1 < content.len and content[i + 1] == '*') {
+            // Skip until we find */
+            i += 2;
+            while (i + 1 < content.len) : (i += 1) {
+                if (content[i] == '*' and content[i + 1] == '/') {
+                    i += 1; // Skip the '/'
+                    break;
+                }
+            }
+            continue;
+        }
+
+        try result.append(allocator, c);
+    }
+
+    return result.toOwnedSlice(allocator);
+}
 
 /// File loader service for discovering and loading configuration files
 pub const FileLoader = struct {
     allocator: std.mem.Allocator,
 
-    const EXTENSIONS = [_][]const u8{ ".json", ".zig" };
+    const EXTENSIONS = [_][]const u8{ ".json", ".jsonc", ".zig" };
     const PROJECT_PATHS = [_][]const u8{ "", "config", ".config" };
+    const COMMON_NAMES = [_][]const u8{ "package", "pantry" };
 
     pub fn init(allocator: std.mem.Allocator) FileLoader {
         return FileLoader{
@@ -21,7 +78,7 @@ pub const FileLoader = struct {
         name: []const u8,
         cwd: []const u8,
     ) !?[]const u8 {
-        // Search in project directories
+        // Search in project directories with the provided name
         for (PROJECT_PATHS) |dir| {
             for (EXTENSIONS) |ext| {
                 const path = if (dir.len == 0)
@@ -35,8 +92,22 @@ pub const FileLoader = struct {
             }
         }
 
-        // Search in home directory
-        const home = std.posix.getenv("HOME") orelse return null;
+        // Also try common package file names (package.json, pantry.json, etc.)
+        for (COMMON_NAMES) |common_name| {
+            for (EXTENSIONS) |ext| {
+                const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ cwd, common_name, ext });
+                defer self.allocator.free(path);
+
+                std.fs.accessAbsolute(path, .{}) catch continue;
+                return try self.allocator.dupe(u8, path);
+            }
+        }
+
+        // Search in home directory (cross-platform)
+        const home_var = if (@import("builtin").os.tag == .windows) "USERPROFILE" else "HOME";
+        const home = utils.getEnvVar(self.allocator, home_var) orelse return null;
+        defer self.allocator.free(home);
+
         for (EXTENSIONS) |ext| {
             const path = try std.fmt.allocPrint(
                 self.allocator,
@@ -53,10 +124,11 @@ pub const FileLoader = struct {
     }
 
     /// Load and parse config file
+    /// Returns a Parsed struct that owns the memory - caller must call deinit()
     pub fn loadConfigFile(
         self: *FileLoader,
         path: []const u8,
-    ) !std.json.Value {
+    ) !std.json.Parsed(std.json.Value) {
         const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
             return switch (err) {
                 error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
@@ -74,17 +146,28 @@ pub const FileLoader = struct {
         };
         defer self.allocator.free(content);
 
-        // Parse JSON
+        // Strip comments if this is a JSONC file
+        const is_jsonc = std.mem.endsWith(u8, path, ".jsonc");
+        const json_content = if (is_jsonc)
+            try stripJsonComments(self.allocator, content)
+        else
+            content;
+        defer if (is_jsonc) self.allocator.free(json_content);
+
+        // Parse JSON/JSONC (with comments support)
         const parsed = std.json.parseFromSlice(
             std.json.Value,
             self.allocator,
-            content,
-            .{},
+            json_content,
+            .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_always,
+            },
         ) catch {
             return errors.ZigConfigError.ConfigFileSyntaxError;
         };
 
-        return parsed.value;
+        return parsed;
     }
 
     /// Get file modification time for cache invalidation
@@ -148,9 +231,9 @@ test "FileLoader.loadConfigFile parses JSON" {
     defer allocator.free(path);
 
     var loader = FileLoader.init(allocator);
-    var config = try loader.loadConfigFile(path);
-    defer config.object.deinit();
+    var parsed = try loader.loadConfigFile(path);
+    defer parsed.deinit();
 
-    try std.testing.expect(config == .object);
-    try std.testing.expect(config.object.get("key") != null);
+    try std.testing.expect(parsed.value == .object);
+    try std.testing.expect(parsed.value.object.get("key") != null);
 }

@@ -42,8 +42,12 @@ pub const ConfigLoader = struct {
         var primary_source: types.ConfigSource = .defaults;
 
         // Try loading from local file
-        if (try self.loadFromFile(options.name, cwd)) |config| {
-            final_config = config;
+        if (try self.loadFromFile(options.name, cwd)) |parsed| {
+            // Clone the config so we can free the parsed result immediately
+            final_config = try utils.cloneJsonValue(self.allocator, parsed.value);
+            // parsed will be freed when it goes out of scope (errdefer would handle errors)
+            var mutable_parsed = parsed;
+            mutable_parsed.deinit();
             primary_source = .file_local;
             try sources.append(self.allocator, types.SourceInfo{
                 .source = .file_local,
@@ -54,8 +58,11 @@ pub const ConfigLoader = struct {
 
         // Try loading from home directory
         if (final_config == null) {
-            if (try self.loadFromHome(options.name)) |config| {
-                final_config = config;
+            if (try self.loadFromHome(options.name)) |parsed| {
+                // Clone the config so we can free the parsed result immediately
+                final_config = try utils.cloneJsonValue(self.allocator, parsed.value);
+                var mutable_parsed = parsed;
+                mutable_parsed.deinit();
                 primary_source = .file_home;
                 try sources.append(self.allocator, types.SourceInfo{
                     .source = .file_home,
@@ -100,18 +107,22 @@ pub const ConfigLoader = struct {
             .sources = try sources.toOwnedSlice(self.allocator),
             .loaded_at = std.time.timestamp(),
             .allocator = self.allocator,
+            // parsed_json is null - deinit will use manual freeing via freeJsonValue
         };
     }
 
-    fn loadFromFile(self: *ConfigLoader, name: []const u8, cwd: []const u8) !?std.json.Value {
+    fn loadFromFile(self: *ConfigLoader, name: []const u8, cwd: []const u8) !?std.json.Parsed(std.json.Value) {
         const path = try self.file_loader.findConfigFile(name, cwd) orelse return null;
         defer self.allocator.free(path);
 
         return try self.file_loader.loadConfigFile(path);
     }
 
-    fn loadFromHome(self: *ConfigLoader, name: []const u8) !?std.json.Value {
-        const home = std.posix.getenv("HOME") orelse return null;
+    fn loadFromHome(self: *ConfigLoader, name: []const u8) !?std.json.Parsed(std.json.Value) {
+        // Get HOME directory (cross-platform: HOME on Unix, USERPROFILE on Windows)
+        const home_var = if (@import("builtin").os.tag == .windows) "USERPROFILE" else "HOME";
+        const home = utils.getEnvVar(self.allocator, home_var) orelse return null;
+        defer self.allocator.free(home);
 
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const config_dir = try std.fmt.bufPrint(&buf, "{s}/.config", .{home});

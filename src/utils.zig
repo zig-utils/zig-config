@@ -1,5 +1,12 @@
 const std = @import("std");
 
+/// Cross-platform environment variable retrieval
+/// Returns null if the environment variable is not set
+/// The returned string is owned by the environment and should not be freed
+pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
+}
+
 /// Deep clone a JSON value with all nested structures
 pub fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
     return switch (value) {
@@ -24,6 +31,34 @@ pub fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.
             return .{ .object = new_obj };
         },
     };
+}
+
+/// Recursively free a JSON value and all its children
+pub fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
+    switch (value) {
+        .string => |s| allocator.free(s),
+        .array => |arr| {
+            // Recursively free all array items
+            for (arr.items) |item| {
+                freeJsonValue(allocator, item);
+            }
+            allocator.free(arr.items);
+        },
+        .object => |obj| {
+            // Recursively free all object entries
+            var iter = obj.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            // Free the ObjectMap itself
+            var mutable_obj = obj;
+            mutable_obj.deinit();
+        },
+        else => {
+            // Primitives (null, bool, integer, float, number_string) don't need freeing
+        },
+    }
 }
 
 /// Deep equality comparison for JSON values
