@@ -42,6 +42,10 @@ pub const LoadOptions = struct {
 
     /// Array merge strategy
     merge_strategy: MergeStrategy = .smart,
+
+    /// Nested key to extract from config (e.g., "den" to get {"den": {...}} -> {...})
+    /// Supports dot notation for deep nesting: "tooling.shell" extracts {"tooling": {"shell": {...}}} -> {...}
+    nested_key: ?[]const u8 = null,
 };
 
 /// Information about a configuration source

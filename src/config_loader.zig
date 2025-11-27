@@ -84,6 +84,19 @@ pub const ConfigLoader = struct {
             final_config = .{ .object = std.json.ObjectMap.init(self.allocator) };
         }
 
+        // Extract nested key if specified
+        var nested_cloned: ?std.json.Value = null;
+        if (options.nested_key) |nested_key| {
+            if (extractNestedValue(final_config.?, nested_key)) |nested_value| {
+                // Clone the nested value since the original will be freed
+                nested_cloned = try utils.cloneJsonValue(self.allocator, nested_value);
+                final_config = nested_cloned;
+            } else {
+                // Nested key not found, use empty object
+                final_config = .{ .object = std.json.ObjectMap.init(self.allocator) };
+            }
+        }
+
         // Apply environment variables
         const env_prefix = options.env_prefix orelse options.name;
         const with_env = try self.env_processor.applyEnvVars(final_config.?, env_prefix);
@@ -104,11 +117,16 @@ pub const ConfigLoader = struct {
             utils.freeJsonValue(self.allocator, final_config.?);
         }
 
+        // Free the cloned nested value if we created one
+        if (nested_cloned) |cloned| {
+            utils.freeJsonValue(self.allocator, cloned);
+        }
+
         return types.UntypedConfigResult{
             .config = with_env,
             .source = primary_source,
             .sources = try sources.toOwnedSlice(self.allocator),
-            .loaded_at = std.time.timestamp(),
+            .loaded_at = getCurrentTimestamp(),
             .allocator = self.allocator,
             .parsed_json = parsed_json,
             .config_was_modified = config_was_modified,
@@ -143,6 +161,32 @@ pub const ConfigLoader = struct {
         return !utils.jsonValuesEqual(a, b);
     }
 };
+
+/// Get current timestamp in seconds (Zig 0.16+ compatible)
+fn getCurrentTimestamp() i64 {
+    // Use POSIX clock_gettime for real-time timestamp
+    const ts = std.posix.clock_gettime(.REALTIME) catch {
+        return 0;
+    };
+    return ts.sec;
+}
+
+/// Extract a nested value from a JSON object using dot notation
+/// e.g., "den" extracts {"den": {...}} -> {...}
+/// e.g., "tooling.shell" extracts {"tooling": {"shell": {...}}} -> {...}
+fn extractNestedValue(value: std.json.Value, path: []const u8) ?std.json.Value {
+    if (value != .object) return null;
+
+    var current = value;
+    var iter = std.mem.splitScalar(u8, path, '.');
+
+    while (iter.next()) |key| {
+        if (current != .object) return null;
+        current = current.object.get(key) orelse return null;
+    }
+
+    return current;
+}
 
 /// Primary typed configuration loading function
 pub fn loadConfig(
@@ -254,4 +298,104 @@ test "loadConfig loads typed config from file" {
     try std.testing.expectEqual(types.ConfigSource.file_local, result.source);
     try std.testing.expectEqual(true, result.value.loaded);
     try std.testing.expectEqual(@as(i32, 42), result.value.count.?);
+}
+
+test "loadConfig extracts nested key from package.json" {
+    const allocator = std.testing.allocator;
+
+    const DenConfig = struct {
+        verbose: bool = false,
+        port: u16 = 8080,
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Create a package.json with a "den" section
+    const file = try tmp.dir.createFile("package.json", .{});
+    defer file.close();
+    try file.writeAll(
+        \\{
+        \\  "name": "my-project",
+        \\  "version": "1.0.0",
+        \\  "den": {
+        \\    "verbose": true,
+        \\    "port": 3000
+        \\  }
+        \\}
+    );
+
+    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+
+    var result = try loadConfig(DenConfig, allocator, .{
+        .name = "package",
+        .cwd = cwd,
+        .nested_key = "den",
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(true, result.value.verbose);
+    try std.testing.expectEqual(@as(u16, 3000), result.value.port);
+}
+
+test "loadConfig extracts deeply nested key" {
+    const allocator = std.testing.allocator;
+
+    const ShellConfig = struct {
+        shell: []const u8 = "bash",
+        timeout: u32 = 30,
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile("config.json", .{});
+    defer file.close();
+    try file.writeAll(
+        \\{
+        \\  "tooling": {
+        \\    "shell": {
+        \\      "shell": "zsh",
+        \\      "timeout": 60
+        \\    }
+        \\  }
+        \\}
+    );
+
+    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+
+    var result = try loadConfig(ShellConfig, allocator, .{
+        .name = "config",
+        .cwd = cwd,
+        .nested_key = "tooling.shell",
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("zsh", result.value.shell);
+    try std.testing.expectEqual(@as(u32, 60), result.value.timeout);
+}
+
+test "extractNestedValue returns null for missing key" {
+    var obj = std.json.ObjectMap.init(std.testing.allocator);
+    defer obj.deinit();
+    try obj.put("foo", .{ .integer = 1 });
+
+    const value = extractNestedValue(.{ .object = obj }, "bar");
+    try std.testing.expect(value == null);
+}
+
+test "extractNestedValue handles single key" {
+    var inner = std.json.ObjectMap.init(std.testing.allocator);
+    defer inner.deinit();
+    try inner.put("value", .{ .integer = 42 });
+
+    var obj = std.json.ObjectMap.init(std.testing.allocator);
+    defer obj.deinit();
+    try obj.put("den", .{ .object = inner });
+
+    const result = extractNestedValue(.{ .object = obj }, "den");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .object);
 }

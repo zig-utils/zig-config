@@ -138,20 +138,35 @@ pub const FileLoader = struct {
         };
         defer file.close();
 
-        const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch |err| {
-            return switch (err) {
-                error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
-                else => errors.ZigConfigError.ConfigFileInvalid,
+        // Read file content using loop (Zig 0.16+ compatible)
+        var content = std.ArrayList(u8).empty;
+        defer content.deinit(self.allocator);
+
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = file.read(&buf) catch |err| {
+                return switch (err) {
+                    error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
+                    else => errors.ZigConfigError.ConfigFileInvalid,
+                };
             };
+            if (n == 0) break;
+            content.appendSlice(self.allocator, buf[0..n]) catch {
+                return errors.ZigConfigError.ConfigFileInvalid;
+            };
+        }
+
+        const owned_content = content.toOwnedSlice(self.allocator) catch {
+            return errors.ZigConfigError.ConfigFileInvalid;
         };
-        defer self.allocator.free(content);
+        defer self.allocator.free(owned_content);
 
         // Strip comments if this is a JSONC file
         const is_jsonc = std.mem.endsWith(u8, path, ".jsonc");
         const json_content = if (is_jsonc)
-            try stripJsonComments(self.allocator, content)
+            try stripJsonComments(self.allocator, owned_content)
         else
-            content;
+            owned_content;
         defer if (is_jsonc) self.allocator.free(json_content);
 
         // Parse JSON/JSONC (with comments support)
@@ -177,7 +192,9 @@ pub const FileLoader = struct {
         defer file.close();
 
         const stat = try file.stat();
-        return @as(i64, @intCast(stat.mtime));
+        // Handle Zig 0.16+ API change: mtime is now a Timestamp struct with nanoseconds field
+        // Convert nanoseconds to seconds for cache timestamp
+        return @as(i64, @intCast(@divFloor(stat.mtime.nanoseconds, std.time.ns_per_s)));
     }
 };
 
