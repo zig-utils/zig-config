@@ -122,7 +122,7 @@ pub const FileLoader = struct {
             );
             defer self.allocator.free(path);
 
-            std.fs.accessAbsolute(path, .{}) catch continue;
+            std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
             return try self.allocator.dupe(u8, path);
         }
 
