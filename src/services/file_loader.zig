@@ -3,6 +3,12 @@ const types = @import("../types.zig");
 const errors = @import("../errors.zig");
 const utils = @import("../utils.zig");
 
+// Zig 0.16+ IO helper
+var io_instance: std.Io.Threaded = .init_single_threaded;
+fn getIo() std.Io {
+    return io_instance.io();
+}
+
 /// Strip single-line (//) and multi-line (/* */) comments from JSON content
 fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, content.len);
@@ -87,7 +93,7 @@ pub const FileLoader = struct {
                     try std.fmt.allocPrint(self.allocator, "{s}/{s}/{s}{s}", .{ cwd, dir, name, ext });
                 defer self.allocator.free(path);
 
-                std.fs.accessAbsolute(path, .{}) catch continue;
+                std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
                 return try self.allocator.dupe(u8, path);
             }
         }
@@ -98,7 +104,7 @@ pub const FileLoader = struct {
                 const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ cwd, common_name, ext });
                 defer self.allocator.free(path);
 
-                std.fs.accessAbsolute(path, .{}) catch continue;
+                std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
                 return try self.allocator.dupe(u8, path);
             }
         }
@@ -129,14 +135,14 @@ pub const FileLoader = struct {
         self: *FileLoader,
         path: []const u8,
     ) !std.json.Parsed(std.json.Value) {
-        const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        const file = std.Io.Dir.openFileAbsolute(getIo(), path, .{}) catch |err| {
             return switch (err) {
                 error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
                 error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                 else => err,
             };
         };
-        defer file.close();
+        defer file.close(getIo());
 
         // Read file content using loop (Zig 0.16+ compatible)
         var content = std.ArrayList(u8).empty;
@@ -144,7 +150,7 @@ pub const FileLoader = struct {
 
         var buf: [4096]u8 = undefined;
         while (true) {
-            const n = file.read(&buf) catch |err| {
+            const n = std.posix.read(file.handle, &buf) catch |err| {
                 return switch (err) {
                     error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                     else => errors.ZigConfigError.ConfigFileInvalid,
@@ -188,8 +194,8 @@ pub const FileLoader = struct {
     /// Get file modification time for cache invalidation
     pub fn getModTime(self: *FileLoader, path: []const u8) !i64 {
         _ = self;
-        const file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
+        const file = try std.Io.Dir.openFileAbsolute(getIo(), path, .{});
+        defer file.close(getIo());
 
         const stat = try file.stat();
         // Handle Zig 0.16+ API change: mtime is now a Timestamp struct with nanoseconds field
@@ -205,7 +211,7 @@ test "FileLoader.findConfigFile finds in project root" {
     defer tmp.cleanup();
 
     const file = try tmp.dir.createFile("test.json", .{});
-    defer file.close();
+    defer file.close(getIo());
     try file.writeAll("{}");
 
     const cwd = try tmp.dir.realpathAlloc(allocator, ".");
@@ -241,7 +247,7 @@ test "FileLoader.loadConfigFile parses JSON" {
     defer tmp.cleanup();
 
     const file = try tmp.dir.createFile("test.json", .{});
-    defer file.close();
+    defer file.close(getIo());
     try file.writeAll("{\"key\": \"value\"}");
 
     const path = try tmp.dir.realpathAlloc(allocator, "test.json");
