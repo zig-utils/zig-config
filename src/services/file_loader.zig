@@ -9,6 +9,13 @@ fn getIo() std.Io {
     return io_instance.io();
 }
 
+/// Check if a file exists using openat
+fn fileExists(path: []const u8) bool {
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return false;
+    std.posix.close(fd);
+    return true;
+}
+
 /// Strip single-line (//) and multi-line (/* */) comments from JSON content
 fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, content.len);
@@ -93,8 +100,9 @@ pub const FileLoader = struct {
                     try std.fmt.allocPrint(self.allocator, "{s}/{s}/{s}{s}", .{ cwd, dir, name, ext });
                 defer self.allocator.free(path);
 
-                std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
-                return try self.allocator.dupe(u8, path);
+                if (fileExists(path)) {
+                    return try self.allocator.dupe(u8, path);
+                }
             }
         }
 
@@ -104,8 +112,9 @@ pub const FileLoader = struct {
                 const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ cwd, common_name, ext });
                 defer self.allocator.free(path);
 
-                std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
-                return try self.allocator.dupe(u8, path);
+                if (fileExists(path)) {
+                    return try self.allocator.dupe(u8, path);
+                }
             }
         }
 
@@ -122,8 +131,9 @@ pub const FileLoader = struct {
             );
             defer self.allocator.free(path);
 
-            std.Io.Dir.accessAbsolute(getIo(), path, .{}) catch continue;
-            return try self.allocator.dupe(u8, path);
+            if (fileExists(path)) {
+                return try self.allocator.dupe(u8, path);
+            }
         }
 
         return null;
@@ -135,14 +145,15 @@ pub const FileLoader = struct {
         self: *FileLoader,
         path: []const u8,
     ) !std.json.Parsed(std.json.Value) {
-        const file = std.Io.Dir.openFileAbsolute(getIo(), path, .{}) catch |err| {
+        // Use posix.openat since Io.Dir doesn't have openFileAbsolute in Zig 0.16
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch |err| {
             return switch (err) {
                 error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
                 error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
-                else => err,
+                else => errors.ZigConfigError.ConfigFileInvalid,
             };
         };
-        defer file.close(getIo());
+        defer std.posix.close(fd);
 
         // Read file content using loop (Zig 0.16+ compatible)
         var content = std.ArrayList(u8).empty;
@@ -150,7 +161,7 @@ pub const FileLoader = struct {
 
         var buf: [4096]u8 = undefined;
         while (true) {
-            const n = std.posix.read(file.handle, &buf) catch |err| {
+            const n = std.posix.read(fd, &buf) catch |err| {
                 return switch (err) {
                     error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                     else => errors.ZigConfigError.ConfigFileInvalid,
@@ -194,13 +205,10 @@ pub const FileLoader = struct {
     /// Get file modification time for cache invalidation
     pub fn getModTime(self: *FileLoader, path: []const u8) !i64 {
         _ = self;
-        const file = try std.Io.Dir.openFileAbsolute(getIo(), path, .{});
-        defer file.close(getIo());
-
-        const stat = try file.stat();
-        // Handle Zig 0.16+ API change: mtime is now a Timestamp struct with nanoseconds field
-        // Convert nanoseconds to seconds for cache timestamp
-        return @as(i64, @intCast(@divFloor(stat.mtime.nanoseconds, std.time.ns_per_s)));
+        // Use posix stat since Io.Dir doesn't have openFileAbsolute
+        const stat = try std.posix.stat(path);
+        // Return mtime in seconds
+        return @as(i64, stat.mtime.sec);
     }
 };
 

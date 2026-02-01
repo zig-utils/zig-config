@@ -31,7 +31,11 @@ pub const ConfigLoader = struct {
         // Determine CWD - allocate if not provided
         var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
         const cwd_from_fs = if (options.cwd == null) blk: {
-            const path = std.posix.getcwd(&cwd_buf) catch return error.OutOfMemory;
+            const path = blk2: {
+                const result = std.c.getcwd(&cwd_buf, cwd_buf.len);
+                if (result == null) return error.OutOfMemory;
+                break :blk2 std.mem.sliceTo(&cwd_buf, 0);
+            };
             break :blk try self.allocator.dupe(u8, path);
         } else null;
         defer if (cwd_from_fs) |path| self.allocator.free(path);

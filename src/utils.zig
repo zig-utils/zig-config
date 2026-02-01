@@ -4,7 +4,14 @@ const std = @import("std");
 /// Returns null if the environment variable is not set
 /// The returned string is owned by the environment and should not be freed
 pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch null;
+    // Use C getenv since std.process.getEnvVarOwned was removed
+    var key_buf: [4096:0]u8 = undefined;
+    if (key.len >= key_buf.len) return null;
+    @memcpy(key_buf[0..key.len], key);
+    key_buf[key.len] = 0;
+    const value = std.c.getenv(&key_buf) orelse return null;
+    const slice = std.mem.sliceTo(value, 0);
+    return allocator.dupe(u8, slice) catch null;
 }
 
 /// Deep clone a JSON value with all nested structures
