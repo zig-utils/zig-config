@@ -6,6 +6,33 @@ const EnvProcessor = @import("services/env_processor.zig").EnvProcessor;
 const merge = @import("merge.zig");
 const utils = @import("utils.zig");
 
+// Zig 0.16+ IO helper
+var io_instance: std.Io.Threaded = .init_single_threaded;
+fn getIo() std.Io {
+    return io_instance.io();
+}
+
+/// Get the absolute path of a file relative to a tmpDir (Zig 0.16 compat)
+fn tmpDirRealPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, sub_path: []const u8) ![]const u8 {
+    // tmpDir is at .zig-cache/tmp/{sub_path} relative to cwd
+    const c_realpath = std.c.realpath;
+    var rel_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rel = if (sub_path.len == 0 or std.mem.eql(u8, sub_path, "."))
+        std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}", .{&tmp.sub_path}) catch return error.InvalidPath
+    else
+        std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}/{s}", .{ &tmp.sub_path, sub_path }) catch return error.InvalidPath;
+
+    // Null-terminate for C
+    var path_z: [std.fs.max_path_bytes:0]u8 = undefined;
+    @memcpy(path_z[0..rel.len], rel);
+    path_z[rel.len] = 0;
+
+    var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const resolved = c_realpath(&path_z, &resolved_buf) orelse return error.FileNotFound;
+    const len = std.mem.len(resolved);
+    return try allocator.dupe(u8, resolved[0..len]);
+}
+
 /// Configuration loader orchestrator
 pub const ConfigLoader = struct {
     file_loader: FileLoader,
@@ -254,7 +281,7 @@ test "loadConfig returns typed defaults when no file found" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     // Create defaults
@@ -286,11 +313,11 @@ test "loadConfig loads typed config from file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("test.json", .{});
-    defer file.close();
-    try file.writeAll("{\"loaded\": true, \"count\": 42}");
+    const file = try tmp.dir.createFile(getIo(), "test.json", .{});
+    defer file.close(getIo());
+    try file.writePositionalAll(getIo(), "{\"loaded\": true, \"count\": 42}", 0);
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     var result = try loadConfig(TestConfig, allocator, .{
@@ -316,9 +343,9 @@ test "loadConfig extracts nested key from package.json" {
     defer tmp.cleanup();
 
     // Create a package.json with a "den" section
-    const file = try tmp.dir.createFile("package.json", .{});
-    defer file.close();
-    try file.writeAll(
+    const file = try tmp.dir.createFile(getIo(), "package.json", .{});
+    defer file.close(getIo());
+    try file.writePositionalAll(getIo(),
         \\{
         \\  "name": "my-project",
         \\  "version": "1.0.0",
@@ -327,9 +354,9 @@ test "loadConfig extracts nested key from package.json" {
         \\    "port": 3000
         \\  }
         \\}
-    );
+    , 0);
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     var result = try loadConfig(DenConfig, allocator, .{
@@ -354,9 +381,9 @@ test "loadConfig extracts deeply nested key" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("config.json", .{});
-    defer file.close();
-    try file.writeAll(
+    const file = try tmp.dir.createFile(getIo(), "config.json", .{});
+    defer file.close(getIo());
+    try file.writePositionalAll(getIo(),
         \\{
         \\  "tooling": {
         \\    "shell": {
@@ -365,9 +392,9 @@ test "loadConfig extracts deeply nested key" {
         \\    }
         \\  }
         \\}
-    );
+    , 0);
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     var result = try loadConfig(ShellConfig, allocator, .{

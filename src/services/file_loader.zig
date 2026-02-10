@@ -205,12 +205,35 @@ pub const FileLoader = struct {
     /// Get file modification time for cache invalidation
     pub fn getModTime(self: *FileLoader, path: []const u8) !i64 {
         _ = self;
-        // Use posix stat since Io.Dir doesn't have openFileAbsolute
-        const stat = try std.posix.stat(path);
-        // Return mtime in seconds
-        return @as(i64, stat.mtime.sec);
+        // Open file and use File.stat to get modification time (Zig 0.16)
+        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+        var file: std.Io.File = std.mem.zeroes(std.Io.File);
+        file.handle = fd;
+        defer file.close(getIo());
+        const stat = try file.stat(getIo());
+        // mtime is in nanoseconds, convert to seconds
+        return @intCast(@divTrunc(stat.mtime.nanoseconds, std.time.ns_per_s));
     }
 };
+
+/// Get the absolute path of a file relative to a tmpDir (Zig 0.16 compat)
+fn tmpDirRealPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, sub_path: []const u8) ![]const u8 {
+    const c_realpath = std.c.realpath;
+    var rel_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rel = if (sub_path.len == 0 or std.mem.eql(u8, sub_path, "."))
+        std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}", .{&tmp.sub_path}) catch return error.InvalidPath
+    else
+        std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}/{s}", .{ &tmp.sub_path, sub_path }) catch return error.InvalidPath;
+
+    var path_z: [std.fs.max_path_bytes:0]u8 = undefined;
+    @memcpy(path_z[0..rel.len], rel);
+    path_z[rel.len] = 0;
+
+    var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const resolved = c_realpath(&path_z, &resolved_buf) orelse return error.FileNotFound;
+    const len = std.mem.len(resolved);
+    return try allocator.dupe(u8, resolved[0..len]);
+}
 
 test "FileLoader.findConfigFile finds in project root" {
     const allocator = std.testing.allocator;
@@ -218,11 +241,11 @@ test "FileLoader.findConfigFile finds in project root" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("test.json", .{});
+    const file = try tmp.dir.createFile(getIo(), "test.json", .{});
     defer file.close(getIo());
-    try file.writeAll("{}");
+    try file.writePositionalAll(getIo(), "{}", 0);
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     var loader = FileLoader.init(allocator);
@@ -239,7 +262,7 @@ test "FileLoader.findConfigFile returns null when not found" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const cwd = try tmp.dir.realpathAlloc(allocator, ".");
+    const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
 
     var loader = FileLoader.init(allocator);
@@ -254,11 +277,11 @@ test "FileLoader.loadConfigFile parses JSON" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("test.json", .{});
+    const file = try tmp.dir.createFile(getIo(), "test.json", .{});
     defer file.close(getIo());
-    try file.writeAll("{\"key\": \"value\"}");
+    try file.writePositionalAll(getIo(), "{\"key\": \"value\"}", 0);
 
-    const path = try tmp.dir.realpathAlloc(allocator, "test.json");
+    const path = try tmpDirRealPath(allocator, &tmp, "test.json");
     defer allocator.free(path);
 
     var loader = FileLoader.init(allocator);
