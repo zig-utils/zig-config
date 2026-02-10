@@ -1,6 +1,6 @@
 # ZigConfig
 
-A zero-dependency configuration loader for Zig, inspired by [bunfig](https://github.com/stacksjs/bunfig).
+A zero-dependency configuration loader for Zig 0.16+, inspired by [bunfig](https://github.com/stacksjs/bunfig).
 
 ## Features
 
@@ -13,15 +13,19 @@ A zero-dependency configuration loader for Zig, inspired by [bunfig](https://git
 
 ## Installation
 
-Add zig-config as a dependency in your `build.zig`:
+Clone zig-config into your project's dependency directory:
+
+```bash
+git clone --depth 1 https://github.com/zig-utils/zig-config.git
+```
+
+Then add it as a module in your `build.zig`:
 
 ```zig
-const zig-config = b.dependency("zig-config", .{
+exe.root_module.addImport("zig-config", b.addModule("zig-config", .{
+    .root_source_file = b.path("path/to/zig-config/src/zig-config.zig"),
     .target = target,
-    .optimize = optimize,
-});
-
-exe.root_module.addImport("zig-config", zig-config.module("zig-config"));
+}));
 ```
 
 ## Quick Start
@@ -207,33 +211,29 @@ defer config.deinit(allocator);
 ### Deep Merging
 
 ```zig
-const zig-config = @import("zig-config");
+const std = @import("std");
+const zig_config = @import("zig-config");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var target = std.json.ObjectMap.init(allocator);
-    defer target.deinit();
-    try target.put("a", .{ .integer = 1 });
+    var target_map = std.json.ObjectMap.init(allocator);
+    defer target_map.deinit();
+    try target_map.put("a", .{ .integer = 1 });
 
-    var source = std.json.ObjectMap.init(allocator);
-    defer source.deinit();
-    try source.put("b", .{ .integer = 2 });
+    var source_map = std.json.ObjectMap.init(allocator);
+    defer source_map.deinit();
+    try source_map.put("b", .{ .integer = 2 });
 
-    const merged = try zig-config.deepMerge(
+    const merged = try zig_config.deepMerge(
         allocator,
-        .{ .object = target },
-        .{ .object = source },
+        .{ .object = target_map },
+        .{ .object = source_map },
         .{ .strategy = .smart },  // or .replace, .concat
     );
-    defer {
-        var iter = merged.object.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        var obj = merged.object;
-        obj.deinit();
-    }
+    _ = merged;
 
     // Result: { "a": 1, "b": 2 }
 }
@@ -265,18 +265,19 @@ pub fn main() !void {
 
 ## Configuration Result
 
-The `ConfigResult` struct contains:
+`ConfigResult(T)` is a generic struct parameterized by your config type:
 
 ```zig
-pub const ConfigResult = struct {
-    config: std.json.Value,        // The loaded configuration
-    source: ConfigSource,          // Primary source (.file_local, .file_home, .env_vars, .defaults)
-    sources: []SourceInfo,         // All sources that contributed
-    loaded_at: i64,               // Timestamp
-    allocator: std.mem.Allocator, // Allocator used
-    
-    pub fn deinit(self: *ConfigResult) void;
-};
+pub fn ConfigResult(comptime T: type) type {
+    return struct {
+        value: T,                      // Your typed configuration
+        source: ConfigSource,          // Primary source (.file_local, .file_home, .env_vars, .defaults)
+        sources: []SourceInfo,         // All sources that contributed
+        loaded_at: i64,               // Timestamp
+
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void;
+    };
+}
 ```
 
 ## File Discovery
@@ -312,11 +313,14 @@ pub const ZigConfigError = error{
 Example error handling:
 
 ```zig
-const config = zig-config.loadConfig(allocator, .{
+const AppConfig = struct {
+    port: u16 = 8080,
+};
+
+var config = zig_config.loadConfig(AppConfig, allocator, .{
     .name = "myapp",
 }) catch |err| switch (err) {
     error.ConfigFileNotFound => {
-        // Use defaults or create new config
         std.debug.print("No config found, using defaults\n", .{});
         return;
     },
@@ -326,7 +330,7 @@ const config = zig-config.loadConfig(allocator, .{
     },
     else => return err,
 };
-defer config.deinit();
+defer config.deinit(allocator);
 ```
 
 ## Testing
@@ -344,22 +348,24 @@ All 20 tests passing! Note: There are 4 known memory "leaks" from Zig's JSON par
 #### `loadConfig`
 ```zig
 pub fn loadConfig(
+    comptime T: type,
     allocator: std.mem.Allocator,
     options: types.LoadOptions,
-) !types.ConfigResult
+) !types.ConfigResult(T)
 ```
 
-Load configuration with full error handling.
+Load configuration with full error handling. Returns a typed result.
 
 #### `tryLoadConfig`
 ```zig
 pub fn tryLoadConfig(
+    comptime T: type,
     allocator: std.mem.Allocator,
     options: types.LoadOptions,
-) ?types.ConfigResult
+) ?types.ConfigResult(T)
 ```
 
-Load configuration, returning `null` on error (no exceptions).
+Load configuration, returning `null` on error.
 
 #### `deepMerge`
 ```zig
