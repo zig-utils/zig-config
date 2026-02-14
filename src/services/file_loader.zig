@@ -75,7 +75,9 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
 pub const FileLoader = struct {
     allocator: std.mem.Allocator,
 
-    const EXTENSIONS = [_][]const u8{ ".json", ".jsonc", ".zig" };
+    const EXTENSIONS = [_][]const u8{ ".json", ".jsonc", ".zig", ".ts" };
+    /// Also search for {name}.config.{ext} (bunfig convention)
+    const CONFIG_EXTENSIONS = [_][]const u8{ ".config.json", ".config.jsonc", ".config.zig", ".config.ts" };
     const PROJECT_PATHS = [_][]const u8{ "", "config", ".config" };
     const COMMON_NAMES = [_][]const u8{ "package", "pantry" };
 
@@ -92,8 +94,10 @@ pub const FileLoader = struct {
         cwd: []const u8,
     ) !?[]const u8 {
         // Search in project directories with the provided name
+        // Try both {name}.{ext} and {name}.config.{ext} (bunfig convention)
+        const all_extensions = EXTENSIONS ++ CONFIG_EXTENSIONS;
         for (PROJECT_PATHS) |dir| {
-            for (EXTENSIONS) |ext| {
+            for (all_extensions) |ext| {
                 const path = if (dir.len == 0)
                     try std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ cwd, name, ext })
                 else
@@ -123,7 +127,7 @@ pub const FileLoader = struct {
         const home = utils.getEnvVar(self.allocator, home_var) orelse return null;
         defer self.allocator.free(home);
 
-        for (EXTENSIONS) |ext| {
+        for (all_extensions) |ext| {
             const path = try std.fmt.allocPrint(
                 self.allocator,
                 "{s}/.config/{s}{s}",
@@ -145,6 +149,11 @@ pub const FileLoader = struct {
         self: *FileLoader,
         path: []const u8,
     ) !std.json.Parsed(std.json.Value) {
+        // Route TypeScript files through bun evaluation
+        if (std.mem.endsWith(u8, path, ".ts")) {
+            return self.loadTypeScriptConfig(path);
+        }
+
         // Use posix.openat since Io.Dir doesn't have openFileAbsolute in Zig 0.16
         const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch |err| {
             return switch (err) {
@@ -191,6 +200,104 @@ pub const FileLoader = struct {
             std.json.Value,
             self.allocator,
             json_content,
+            .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_always,
+            },
+        ) catch {
+            return errors.ZigConfigError.ConfigFileSyntaxError;
+        };
+
+        return parsed;
+    }
+
+    /// Load a TypeScript config file by shelling out to bun.
+    /// Executes: bun -e "const c = await import('<path>'); console.log(JSON.stringify(c.default ?? c))"
+    /// Falls back to ConfigFileInvalid if bun is not available or fails.
+    fn loadTypeScriptConfig(
+        self: *FileLoader,
+        path: []const u8,
+    ) !std.json.Parsed(std.json.Value) {
+        // Build the eval script that imports the TS config and dumps JSON
+        const script = std.fmt.allocPrint(
+            self.allocator,
+            "const c = await import('{s}'); console.log(JSON.stringify(c.default ?? c))",
+            .{path},
+        ) catch return errors.ZigConfigError.ConfigFileInvalid;
+        defer self.allocator.free(script);
+
+        // Null-terminate the script for execve
+        const script_z = self.allocator.dupeZ(u8, script) catch return errors.ZigConfigError.ConfigFileInvalid;
+        defer self.allocator.free(script_z);
+
+        // Use C library pipe + fork + exec to capture bun output
+        var pipe_fds: [2]std.c.fd_t = undefined;
+        if (std.c.pipe(&pipe_fds) != 0) return errors.ZigConfigError.ConfigFileInvalid;
+        const read_fd = pipe_fds[0];
+        const write_fd = pipe_fds[1];
+
+        const pid = std.c.fork();
+        if (pid < 0) {
+            // Fork failed
+            _ = std.c.close(read_fd);
+            _ = std.c.close(write_fd);
+            return errors.ZigConfigError.ConfigFileInvalid;
+        }
+
+        if (pid == 0) {
+            // Child process
+            _ = std.c.close(read_fd);
+            _ = std.c.dup2(write_fd, 1); // stdout
+            _ = std.c.close(write_fd);
+            // Redirect stderr to /dev/null
+            const devnull = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY }, @as(std.c.mode_t, 0));
+            if (devnull >= 0) {
+                _ = std.c.dup2(devnull, 2);
+                _ = std.c.close(devnull);
+            }
+
+            // Find bun in PATH using execve with /usr/bin/env
+            const argv = [_:null]?[*:0]const u8{ "/usr/bin/env", "bun", "-e", script_z, null };
+            const envp: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+            _ = std.c.execve("/usr/bin/env", &argv, envp);
+            std.c._exit(127);
+        }
+
+        // Parent process
+        _ = std.c.close(write_fd);
+
+        // Read all output from the pipe
+        var output = std.ArrayList(u8).empty;
+        defer output.deinit(self.allocator);
+
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = std.c.read(read_fd, &buf, buf.len);
+            if (n <= 0) break;
+            output.appendSlice(self.allocator, buf[0..@intCast(n)]) catch break;
+        }
+        _ = std.c.close(read_fd);
+
+        // Wait for child
+        var status: c_int = 0;
+        _ = std.c.waitpid(pid, &status, 0);
+        // Check WIFEXITED and WEXITSTATUS
+        const exited_normally = (status & 0x7f) == 0;
+        const exit_code = (status >> 8) & 0xff;
+        if (!exited_normally or exit_code != 0) return errors.ZigConfigError.ConfigFileInvalid;
+
+        const json_output = output.toOwnedSlice(self.allocator) catch {
+            return errors.ZigConfigError.ConfigFileInvalid;
+        };
+        defer self.allocator.free(json_output);
+
+        if (json_output.len == 0) return errors.ZigConfigError.ConfigFileInvalid;
+
+        // Parse the JSON output
+        const parsed = std.json.parseFromSlice(
+            std.json.Value,
+            self.allocator,
+            json_output,
             .{
                 .ignore_unknown_fields = true,
                 .allocate = .alloc_always,
