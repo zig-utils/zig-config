@@ -195,11 +195,9 @@ pub const ConfigLoader = struct {
 
 /// Get current timestamp in seconds (Zig 0.16+ compatible)
 fn getCurrentTimestamp() i64 {
-    // Use POSIX clock_gettime for real-time timestamp
-    const ts = std.posix.clock_gettime(.REALTIME) catch {
-        return 0;
-    };
-    return ts.sec;
+    var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i64, ts.sec);
 }
 
 /// Extract a nested value from a JSON object using dot notation
