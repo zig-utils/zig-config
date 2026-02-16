@@ -52,7 +52,8 @@ pub const ConfigLoader = struct {
         self: *ConfigLoader,
         options: types.LoadOptions,
     ) !types.UntypedConfigResult {
-        var sources = try std.ArrayList(types.SourceInfo).initCapacity(self.allocator, 4);
+        var sources = std.ArrayList(types.SourceInfo){};
+        try sources.ensureTotalCapacity(self.allocator, 4);
         defer sources.deinit(self.allocator);
 
         // Determine CWD - allocate if not provided

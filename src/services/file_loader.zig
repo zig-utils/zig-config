@@ -18,7 +18,8 @@ fn fileExists(path: []const u8) bool {
 
 /// Strip single-line (//) and multi-line (/* */) comments from JSON content
 fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
-    var result = try std.ArrayList(u8).initCapacity(allocator, content.len);
+    var result = std.ArrayList(u8){};
+    try result.ensureTotalCapacity(allocator, content.len);
     errdefer result.deinit(allocator);
 
     var i: usize = 0;
