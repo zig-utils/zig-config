@@ -194,8 +194,17 @@ pub const ConfigLoader = struct {
     }
 };
 
-/// Get current timestamp in seconds (Zig 0.16+ compatible)
+/// Get current timestamp in seconds (Zig 0.16+ compatible, cross-platform)
 fn getCurrentTimestamp() i64 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        const FILETIME = extern struct { dwLowDateTime: u32, dwHighDateTime: u32 };
+        const GetSystemTimeAsFileTime = @extern(*const fn (*FILETIME) callconv(.winapi) void, .{ .name = "GetSystemTimeAsFileTime" });
+        var ft: FILETIME = undefined;
+        GetSystemTimeAsFileTime(&ft);
+        const ticks: u64 = @as(u64, ft.dwHighDateTime) << 32 | ft.dwLowDateTime;
+        const unix_ticks: i64 = @as(i64, @bitCast(ticks)) - 116444736000000000;
+        return @divFloor(unix_ticks, 10000000);
+    }
     var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i64, ts.sec);

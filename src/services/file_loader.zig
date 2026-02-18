@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("../types.zig");
 const errors = @import("../errors.zig");
 const utils = @import("../utils.zig");
@@ -9,10 +10,10 @@ fn getIo() std.Io {
     return io_instance.io();
 }
 
-/// Check if a file exists using openat
+/// Check if a file exists using cross-platform Io.Dir
 fn fileExists(path: []const u8) bool {
-    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch return false;
-    std.posix.close(fd);
+    const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch return false;
+    file.close(getIo());
     return true;
 }
 
@@ -155,27 +156,25 @@ pub const FileLoader = struct {
             return self.loadTypeScriptConfig(path);
         }
 
-        // Use posix.openat since Io.Dir doesn't have openFileAbsolute in Zig 0.16
-        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch |err| {
+        // Use cross-platform Io.Dir for file access
+        const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch |err| {
             return switch (err) {
                 error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
                 error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                 else => errors.ZigConfigError.ConfigFileInvalid,
             };
         };
-        defer std.posix.close(fd);
+        defer file.close(getIo());
 
-        // Read file content using loop (Zig 0.16+ compatible)
+        // Read file content using Io.File (cross-platform)
         var content = std.ArrayList(u8).empty;
         defer content.deinit(self.allocator);
 
         var buf: [4096]u8 = undefined;
         while (true) {
-            const n = std.posix.read(fd, &buf) catch |err| {
-                return switch (err) {
-                    error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
-                    else => errors.ZigConfigError.ConfigFileInvalid,
-                };
+            const bufs = [_][]u8{&buf};
+            const n = file.readStreaming(getIo(), &bufs) catch {
+                return errors.ZigConfigError.ConfigFileInvalid;
             };
             if (n == 0) break;
             content.appendSlice(self.allocator, buf[0..n]) catch {
@@ -213,7 +212,7 @@ pub const FileLoader = struct {
     }
 
     /// Load a TypeScript config file by shelling out to bun.
-    /// Executes: bun -e "const c = await import('<path>'); console.log(JSON.stringify(c.default ?? c))"
+    /// Uses std.process.run for cross-platform subprocess execution.
     /// Falls back to ConfigFileInvalid if bun is not available or fails.
     fn loadTypeScriptConfig(
         self: *FileLoader,
@@ -227,78 +226,26 @@ pub const FileLoader = struct {
         ) catch return errors.ZigConfigError.ConfigFileInvalid;
         defer self.allocator.free(script);
 
-        // Null-terminate the script for execve
-        const script_z = self.allocator.dupeZ(u8, script) catch return errors.ZigConfigError.ConfigFileInvalid;
-        defer self.allocator.free(script_z);
-
-        // Use C library pipe + fork + exec to capture bun output
-        var pipe_fds: [2]std.c.fd_t = undefined;
-        if (std.c.pipe(&pipe_fds) != 0) return errors.ZigConfigError.ConfigFileInvalid;
-        const read_fd = pipe_fds[0];
-        const write_fd = pipe_fds[1];
-
-        const pid = std.c.fork();
-        if (pid < 0) {
-            // Fork failed
-            _ = std.c.close(read_fd);
-            _ = std.c.close(write_fd);
-            return errors.ZigConfigError.ConfigFileInvalid;
-        }
-
-        if (pid == 0) {
-            // Child process
-            _ = std.c.close(read_fd);
-            _ = std.c.dup2(write_fd, 1); // stdout
-            _ = std.c.close(write_fd);
-            // Redirect stderr to /dev/null
-            const devnull = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY }, @as(std.c.mode_t, 0));
-            if (devnull >= 0) {
-                _ = std.c.dup2(devnull, 2);
-                _ = std.c.close(devnull);
-            }
-
-            // Find bun in PATH using execve with /usr/bin/env
-            const argv = [_:null]?[*:0]const u8{ "/usr/bin/env", "bun", "-e", script_z, null };
-            const envp: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-            _ = std.c.execve("/usr/bin/env", &argv, envp);
-            std.c._exit(127);
-        }
-
-        // Parent process
-        _ = std.c.close(write_fd);
-
-        // Read all output from the pipe
-        var output = std.ArrayList(u8).empty;
-        defer output.deinit(self.allocator);
-
-        var buf: [4096]u8 = undefined;
-        while (true) {
-            const n = std.c.read(read_fd, &buf, buf.len);
-            if (n <= 0) break;
-            output.appendSlice(self.allocator, buf[0..@intCast(n)]) catch break;
-        }
-        _ = std.c.close(read_fd);
-
-        // Wait for child
-        var status: c_int = 0;
-        _ = std.c.waitpid(pid, &status, 0);
-        // Check WIFEXITED and WEXITSTATUS
-        const exited_normally = (status & 0x7f) == 0;
-        const exit_code = (status >> 8) & 0xff;
-        if (!exited_normally or exit_code != 0) return errors.ZigConfigError.ConfigFileInvalid;
-
-        const json_output = output.toOwnedSlice(self.allocator) catch {
+        // Use cross-platform std.process.run to execute bun
+        const result = std.process.run(self.allocator, getIo(), .{
+            .argv = &.{ "bun", "-e", script },
+        }) catch {
             return errors.ZigConfigError.ConfigFileInvalid;
         };
-        defer self.allocator.free(json_output);
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
 
-        if (json_output.len == 0) return errors.ZigConfigError.ConfigFileInvalid;
+        if (result.term != .exited or result.term.exited != 0) {
+            return errors.ZigConfigError.ConfigFileInvalid;
+        }
+
+        if (result.stdout.len == 0) return errors.ZigConfigError.ConfigFileInvalid;
 
         // Parse the JSON output
         const parsed = std.json.parseFromSlice(
             std.json.Value,
             self.allocator,
-            json_output,
+            result.stdout,
             .{
                 .ignore_unknown_fields = true,
                 .allocate = .alloc_always,
@@ -313,10 +260,8 @@ pub const FileLoader = struct {
     /// Get file modification time for cache invalidation
     pub fn getModTime(self: *FileLoader, path: []const u8) !i64 {
         _ = self;
-        // Open file and use File.stat to get modification time (Zig 0.16)
-        const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
-        var file: std.Io.File = std.mem.zeroes(std.Io.File);
-        file.handle = fd;
+        // Open file using cross-platform Io.Dir and use File.stat
+        const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch return error.FileNotFound;
         defer file.close(getIo());
         const stat = try file.stat(getIo());
         // mtime is in nanoseconds, convert to seconds
