@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: '0.15.1'
+      - run: zig build
+      - run: zig build test
+      - name: Create Release
+        uses: stacksjs/action-releaser@v1.2.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

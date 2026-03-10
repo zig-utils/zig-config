@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Zig ${{ matrix.zig-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        zig-version: ['0.15.1', 'master']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig-version }}
+      - run: zig build
+      - run: zig build test
+
+  lint:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: '0.15.1'
+      - run: zig fmt --check .
