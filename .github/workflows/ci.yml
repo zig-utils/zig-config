@@ -13,13 +13,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        zig-version: ['0.15.1', 'master']
+        zig-version: ['0.15.1']
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - uses: home-lang/pantry-setup@v1
         with:
-          version: ${{ matrix.zig-version }}
+          packages: ziglang.org@${{ matrix.zig-version }}
       - run: zig build
       - run: zig build test
 
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - uses: home-lang/pantry-setup@v1
         with:
-          version: '0.15.1'
+          packages: ziglang.org@0.15.1
       - run: zig fmt --check .
