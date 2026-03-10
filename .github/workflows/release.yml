@@ -13,11 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 'master'
-      - run: zig build
-      - run: zig build test
       - name: Create Release
         uses: stacksjs/action-releaser@v1.2.9
         env:
