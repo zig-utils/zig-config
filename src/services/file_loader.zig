@@ -4,24 +4,18 @@ const types = @import("../types.zig");
 const errors = @import("../errors.zig");
 const utils = @import("../utils.zig");
 
-// Zig 0.16+ IO helper
-var io_instance: std.Io.Threaded = .init_single_threaded;
-fn getIo() std.Io {
-    return io_instance.io();
-}
-
-/// Check if a file exists using cross-platform Io.Dir
+/// Check if a file exists
 fn fileExists(path: []const u8) bool {
-    const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch return false;
-    file.close(getIo());
+    const file = std.fs.cwd().openFile(path, .{}) catch return false;
+    file.close();
     return true;
 }
 
 /// Strip single-line (//) and multi-line (/* */) comments from JSON content
 fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
-    var result = std.ArrayList(u8){};
-    try result.ensureTotalCapacity(allocator, content.len);
-    errdefer result.deinit(allocator);
+    var result = std.ArrayList(u8).init(allocator);
+    try result.ensureTotalCapacity(content.len);
+    errdefer result.deinit();
 
     var i: usize = 0;
     var in_string = false;
@@ -33,12 +27,12 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
         // Handle string literals (comments inside strings should not be stripped)
         if (c == '"' and !escape_next) {
             in_string = !in_string;
-            try result.append(allocator, c);
+            try result.append(c);
             continue;
         }
 
         if (in_string) {
-            try result.append(allocator, c);
+            try result.append(c);
             escape_next = (c == '\\' and !escape_next);
             continue;
         }
@@ -50,7 +44,7 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
             // Skip until end of line
             i += 2;
             while (i < content.len and content[i] != '\n') : (i += 1) {}
-            if (i < content.len) try result.append(allocator, '\n'); // Preserve newline
+            if (i < content.len) try result.append('\n'); // Preserve newline
             continue;
         }
 
@@ -67,10 +61,10 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
             continue;
         }
 
-        try result.append(allocator, c);
+        try result.append(c);
     }
 
-    return result.toOwnedSlice(allocator);
+    return try result.toOwnedSlice();
 }
 
 /// File loader service for discovering and loading configuration files
@@ -156,33 +150,18 @@ pub const FileLoader = struct {
             return self.loadTypeScriptConfig(path);
         }
 
-        // Use cross-platform Io.Dir for file access
-        const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch |err| {
+        // Open file
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             return switch (err) {
                 error.FileNotFound => errors.ZigConfigError.ConfigFileNotFound,
                 error.AccessDenied => errors.ZigConfigError.ConfigFilePermissionDenied,
                 else => errors.ZigConfigError.ConfigFileInvalid,
             };
         };
-        defer file.close(getIo());
+        defer file.close();
 
-        // Read file content using Io.File (cross-platform)
-        var content = std.ArrayList(u8).empty;
-        defer content.deinit(self.allocator);
-
-        var buf: [4096]u8 = undefined;
-        while (true) {
-            const bufs = [_][]u8{&buf};
-            const n = file.readStreaming(getIo(), &bufs) catch {
-                return errors.ZigConfigError.ConfigFileInvalid;
-            };
-            if (n == 0) break;
-            content.appendSlice(self.allocator, buf[0..n]) catch {
-                return errors.ZigConfigError.ConfigFileInvalid;
-            };
-        }
-
-        const owned_content = content.toOwnedSlice(self.allocator) catch {
+        // Read file content
+        const owned_content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch {
             return errors.ZigConfigError.ConfigFileInvalid;
         };
         defer self.allocator.free(owned_content);
@@ -226,8 +205,9 @@ pub const FileLoader = struct {
         ) catch return errors.ZigConfigError.ConfigFileInvalid;
         defer self.allocator.free(script);
 
-        // Use cross-platform std.process.run to execute bun
-        const result = std.process.run(self.allocator, getIo(), .{
+        // Use std.process.Child to execute bun
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
             .argv = &.{ "bun", "-e", script },
         }) catch {
             return errors.ZigConfigError.ConfigFileInvalid;
@@ -260,12 +240,12 @@ pub const FileLoader = struct {
     /// Get file modification time for cache invalidation
     pub fn getModTime(self: *FileLoader, path: []const u8) !i64 {
         _ = self;
-        // Open file using cross-platform Io.Dir and use File.stat
-        const file = std.Io.Dir.cwd().openFile(getIo(), path, .{ .mode = .read_only }) catch return error.FileNotFound;
-        defer file.close(getIo());
-        const stat = try file.stat(getIo());
-        // mtime is in nanoseconds, convert to seconds
-        return @intCast(@divTrunc(stat.mtime.nanoseconds, std.time.ns_per_s));
+        // Open file and use stat
+        const file = std.fs.cwd().openFile(path, .{}) catch return error.FileNotFound;
+        defer file.close();
+        const stat = try file.stat();
+        // mtime is in nanoseconds (i128), convert to seconds
+        return @intCast(@divTrunc(stat.mtime, std.time.ns_per_s));
     }
 };
 
@@ -294,9 +274,9 @@ test "FileLoader.findConfigFile finds in project root" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(getIo(), "test.json", .{});
-    defer file.close(getIo());
-    try file.writePositionalAll(getIo(), "{}", 0);
+    const file = try tmp.dir.createFile("test.json", .{});
+    defer file.close();
+    try file.writeAll("{}");
 
     const cwd = try tmpDirRealPath(allocator, &tmp, ".");
     defer allocator.free(cwd);
@@ -330,9 +310,9 @@ test "FileLoader.loadConfigFile parses JSON" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(getIo(), "test.json", .{});
-    defer file.close(getIo());
-    try file.writePositionalAll(getIo(), "{\"key\": \"value\"}", 0);
+    const file = try tmp.dir.createFile("test.json", .{});
+    defer file.close();
+    try file.writeAll("{\"key\": \"value\"}");
 
     const path = try tmpDirRealPath(allocator, &tmp, "test.json");
     defer allocator.free(path);
