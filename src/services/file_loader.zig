@@ -13,9 +13,9 @@ fn fileExists(path: []const u8) bool {
 
 /// Strip single-line (//) and multi-line (/* */) comments from JSON content
 fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
-    var result = std.ArrayList(u8).init(allocator);
-    try result.ensureTotalCapacity(content.len);
-    errdefer result.deinit();
+    var result: std.ArrayList(u8) = .empty;
+    try result.ensureTotalCapacity(allocator, content.len);
+    errdefer result.deinit(allocator);
 
     var i: usize = 0;
     var in_string = false;
@@ -27,12 +27,12 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
         // Handle string literals (comments inside strings should not be stripped)
         if (c == '"' and !escape_next) {
             in_string = !in_string;
-            try result.append(c);
+            try result.append(allocator, c);
             continue;
         }
 
         if (in_string) {
-            try result.append(c);
+            try result.append(allocator, c);
             escape_next = (c == '\\' and !escape_next);
             continue;
         }
@@ -44,7 +44,7 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
             // Skip until end of line
             i += 2;
             while (i < content.len and content[i] != '\n') : (i += 1) {}
-            if (i < content.len) try result.append('\n'); // Preserve newline
+            if (i < content.len) try result.append(allocator, '\n'); // Preserve newline
             continue;
         }
 
@@ -61,10 +61,10 @@ fn stripJsonComments(allocator: std.mem.Allocator, content: []const u8) ![]const
             continue;
         }
 
-        try result.append(c);
+        try result.append(allocator, c);
     }
 
-    return try result.toOwnedSlice();
+    return try result.toOwnedSlice(allocator);
 }
 
 /// File loader service for discovering and loading configuration files
@@ -215,7 +215,7 @@ pub const FileLoader = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        if (result.term != .exited or result.term.exited != 0) {
+        if (result.term != .Exited or result.term.Exited != 0) {
             return errors.ZigConfigError.ConfigFileInvalid;
         }
 

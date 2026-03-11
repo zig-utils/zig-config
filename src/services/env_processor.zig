@@ -165,7 +165,6 @@ pub const EnvProcessor = struct {
             std.mem.eql(u8, s, "1") or
             std.mem.eql(u8, lower, "yes");
     }
-
 };
 
 test "EnvProcessor.parseEnvValue parses boolean" {
