@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
     const lib_mod = b.addModule("zig-config", .{
         .root_source_file = b.path("src/zig-config.zig"),
         .target = target,
+        .link_libc = true,
     });
 
     // Tests

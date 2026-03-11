@@ -173,7 +173,8 @@ pub const FileLoader = struct {
         var buf: [4096]u8 = undefined;
         while (true) {
             const bufs = [_][]u8{&buf};
-            const n = file.readStreaming(getIo(), &bufs) catch {
+            const n = file.readStreaming(getIo(), &bufs) catch |err| {
+                if (err == error.EndOfStream) break;
                 return errors.ZigConfigError.ConfigFileInvalid;
             };
             if (n == 0) break;
