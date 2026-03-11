@@ -14,7 +14,6 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{
         .root_module = lib_mod,
     });
-    tests.linkLibC();
 
     const run_tests = b.addRunArtifact(tests);
 
