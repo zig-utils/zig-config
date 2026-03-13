@@ -2,7 +2,7 @@
 
 ## About
 
-Configuration management built with Zig.
+zig-config is a zero-dependency configuration loader for Zig 0.16+ inspired by bunfig. It loads configuration from multiple sources (environment variables, local project files, home directory, defaults) with automatic priority-based merging. Define your config schema as a Zig struct for compile-time type safety and IDE autocomplete. Features include type-aware environment variable parsing (booleans, numbers, arrays, JSON), deep merging with three strategies (replace, concat, smart), circular reference detection, and support for JSON and Zig file formats.
 
 ## Linting
 
