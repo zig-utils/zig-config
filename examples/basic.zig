@@ -1,5 +1,5 @@
 const std = @import("std");
-const zig_config = @import("zig-config");
+const zig_config = @import("zig_config");
 
 // Define your configuration structure with type safety!
 const AppConfig = struct {

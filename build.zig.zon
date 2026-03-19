@@ -1,5 +1,5 @@
 .{
-    .name = .@"zig-config",
+    .name = .zig_config,
     .version = "0.1.1",
     .fingerprint = 0x98daf4fbd7f573d9,
     .minimum_zig_version = "0.15.1",
