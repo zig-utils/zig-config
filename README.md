@@ -100,11 +100,13 @@ export MYAPP_NAME="My Application"                           # → string
 ```
 
 Environment variable naming:
+
 - Prefix: Uppercase version of config name (or custom `env_prefix`)
 - Nested keys: Separated by underscores
 - Hyphens: Converted to underscores
 
 Examples:
+
 - `database.host` → `MYAPP_DATABASE_HOST`
 - `api-key` → `MYAPP_API_KEY`
 - `cache.ttl-seconds` → `MYAPP_CACHE_TTL_SECONDS`
@@ -112,6 +114,7 @@ Examples:
 ## Type Safety Features
 
 ### ✅ Compile-Time Type Checking
+
 - **No runtime type errors** - all types validated at compile time
 - **IDE autocomplete** - full IntelliSense support for config fields
 - **Default values** - define defaults directly in your struct
@@ -203,7 +206,7 @@ const Config = struct {
 
 var config = try zig_config.loadConfig(Config, allocator, .{
     .name = "myapp",
-    .env_prefix = "CUSTOM",  // Uses CUSTOM_* instead of MYAPP_*
+    .env_prefix = "CUSTOM",  // Uses CUSTOM** instead of MYAPP**
 });
 defer config.deinit(allocator);
 ```
@@ -242,6 +245,7 @@ pub fn main() !void {
 ### Merge Strategies
 
 #### Replace (default for primitives/arrays)
+
 ```zig
 .{ .strategy = .replace }
 // Arrays are completely replaced
@@ -249,6 +253,7 @@ pub fn main() !void {
 ```
 
 #### Concat (for arrays)
+
 ```zig
 .{ .strategy = .concat }
 // Arrays are concatenated with deduplication
@@ -256,10 +261,11 @@ pub fn main() !void {
 ```
 
 #### Smart (for object arrays)
+
 ```zig
 .{ .strategy = .smart }
 // Object arrays are merged by key (id, name, key, path, type)
-// [{"id": 1, "name": "a"}] + [{"id": 1, "name": "b"}] 
+// [{"id": 1, "name": "a"}] + [{"id": 1, "name": "b"}]
 // = [{"id": 1, "name": "b"}]  // merged by id
 ```
 
@@ -346,6 +352,7 @@ All 20 tests passing! Note: There are 4 known memory "leaks" from Zig's JSON par
 ### Main Functions
 
 #### `loadConfig`
+
 ```zig
 pub fn loadConfig(
     comptime T: type,
@@ -357,6 +364,7 @@ pub fn loadConfig(
 Load configuration with full error handling. Returns a typed result.
 
 #### `tryLoadConfig`
+
 ```zig
 pub fn tryLoadConfig(
     comptime T: type,
@@ -368,6 +376,7 @@ pub fn tryLoadConfig(
 Load configuration, returning `null` on error.
 
 #### `deepMerge`
+
 ```zig
 pub fn deepMerge(
     allocator: std.mem.Allocator,
@@ -415,6 +424,7 @@ MIT
 ## Contributing
 
 Contributions welcome! Please ensure:
+
 - All tests pass (`zig build test`)
 - Code follows Zig style guidelines
 - New features include tests
