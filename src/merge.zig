@@ -122,7 +122,7 @@ fn mergeArrays(
 }
 
 fn cloneArray(allocator: std.mem.Allocator, arr: []std.json.Value) ![]std.json.Value {
-    var result = std.ArrayList(std.json.Value){};
+    var result = std.ArrayList(std.json.Value).empty;
     try result.ensureTotalCapacity(allocator, arr.len);
     for (arr) |item| {
         try result.append(allocator, try utils.cloneJsonValue(allocator, item));
@@ -135,7 +135,7 @@ fn concatArrays(
     target: []std.json.Value,
     source: []std.json.Value,
 ) ![]std.json.Value {
-    var result = std.ArrayList(std.json.Value){};
+    var result = std.ArrayList(std.json.Value).empty;
     try result.ensureTotalCapacity(allocator, target.len + source.len);
 
     // Add all target items
@@ -175,7 +175,7 @@ fn smartMergeArrays(
         return try concatArrays(allocator, target, source);
     };
 
-    var result = std.ArrayList(std.json.Value){};
+    var result = std.ArrayList(std.json.Value).empty;
     try result.ensureTotalCapacity(allocator, target.len + source.len);
     var seen = std.StringHashMap(usize).init(allocator);
     defer seen.deinit();

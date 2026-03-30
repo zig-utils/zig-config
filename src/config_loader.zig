@@ -52,7 +52,7 @@ pub const ConfigLoader = struct {
         self: *ConfigLoader,
         options: types.LoadOptions,
     ) !types.UntypedConfigResult {
-        var sources = std.ArrayList(types.SourceInfo){};
+        var sources = std.ArrayList(types.SourceInfo).empty;
         try sources.ensureTotalCapacity(self.allocator, 4);
         defer sources.deinit(self.allocator);
 
