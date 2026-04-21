@@ -46,12 +46,13 @@ fn deepMergeImpl(
             defer _ = visited.remove(addr);
 
             // Merge objects
-            var result = std.json.ObjectMap.init(allocator);
+            var result: std.json.ObjectMap = .empty;
 
             // Add all target keys
             var target_iter = target_obj.iterator();
             while (target_iter.next()) |entry| {
                 try result.put(
+                    allocator,
                     try allocator.dupe(u8, entry.key_ptr.*),
                     try utils.cloneJsonValue(allocator, entry.value_ptr.*),
                 );
@@ -81,6 +82,7 @@ fn deepMergeImpl(
                 } else {
                     // Add new key
                     try result.put(
+                        allocator,
                         try allocator.dupe(u8, entry.key_ptr.*),
                         try utils.cloneJsonValue(allocator, entry.value_ptr.*),
                     );
@@ -263,15 +265,15 @@ fn valuesEqual(a: std.json.Value, b: std.json.Value) !bool {
 test "deepMerge merges simple objects" {
     const allocator = std.testing.allocator;
 
-    var target_obj = std.json.ObjectMap.init(allocator);
-    defer target_obj.deinit();
-    try target_obj.put("a", .{ .integer = 1 });
-    try target_obj.put("b", .{ .integer = 2 });
+    var target_obj: std.json.ObjectMap = .empty;
+    defer target_obj.deinit(allocator);
+    try target_obj.put(allocator, "a", .{ .integer = 1 });
+    try target_obj.put(allocator, "b", .{ .integer = 2 });
 
-    var source_obj = std.json.ObjectMap.init(allocator);
-    defer source_obj.deinit();
-    try source_obj.put("b", .{ .integer = 3 });
-    try source_obj.put("c", .{ .integer = 4 });
+    var source_obj: std.json.ObjectMap = .empty;
+    defer source_obj.deinit(allocator);
+    try source_obj.put(allocator, "b", .{ .integer = 3 });
+    try source_obj.put(allocator, "c", .{ .integer = 4 });
 
     const target = std.json.Value{ .object = target_obj };
     const source = std.json.Value{ .object = source_obj };
@@ -314,24 +316,24 @@ test "deepMerge handles nested objects correctly" {
     const allocator = std.testing.allocator;
 
     // Create nested target object
-    var target_inner = std.json.ObjectMap.init(allocator);
-    defer target_inner.deinit();
-    try target_inner.put("value", .{ .integer = 1 });
+    var target_inner: std.json.ObjectMap = .empty;
+    defer target_inner.deinit(allocator);
+    try target_inner.put(allocator, "value", .{ .integer = 1 });
 
-    var target_obj = std.json.ObjectMap.init(allocator);
-    defer target_obj.deinit();
-    try target_obj.put("inner", .{ .object = target_inner });
+    var target_obj: std.json.ObjectMap = .empty;
+    defer target_obj.deinit(allocator);
+    try target_obj.put(allocator, "inner", .{ .object = target_inner });
 
     const target = std.json.Value{ .object = target_obj };
 
     // Create nested source object
-    var source_inner = std.json.ObjectMap.init(allocator);
-    defer source_inner.deinit();
-    try source_inner.put("value", .{ .integer = 2 });
+    var source_inner: std.json.ObjectMap = .empty;
+    defer source_inner.deinit(allocator);
+    try source_inner.put(allocator, "value", .{ .integer = 2 });
 
-    var source_obj = std.json.ObjectMap.init(allocator);
-    defer source_obj.deinit();
-    try source_obj.put("inner", .{ .object = source_inner });
+    var source_obj: std.json.ObjectMap = .empty;
+    defer source_obj.deinit(allocator);
+    try source_obj.put(allocator, "inner", .{ .object = source_inner });
 
     const source = std.json.Value{ .object = source_obj };
 
@@ -401,10 +403,10 @@ test "smartMerge merges object arrays by id" {
     const allocator = std.testing.allocator;
 
     // Create target array with one object
-    var target_obj1 = std.json.ObjectMap.init(allocator);
-    defer target_obj1.deinit();
-    try target_obj1.put("id", .{ .string = "1" });
-    try target_obj1.put("value", .{ .integer = 100 });
+    var target_obj1: std.json.ObjectMap = .empty;
+    defer target_obj1.deinit(allocator);
+    try target_obj1.put(allocator, "id", .{ .string = "1" });
+    try target_obj1.put(allocator, "value", .{ .integer = 100 });
 
     const target_items = try allocator.alloc(std.json.Value, 1);
     target_items[0] = .{ .object = target_obj1 };
@@ -412,15 +414,15 @@ test "smartMerge merges object arrays by id" {
     defer target.array.deinit();
 
     // Create source array with overlapping and new object
-    var source_obj1 = std.json.ObjectMap.init(allocator);
-    defer source_obj1.deinit();
-    try source_obj1.put("id", .{ .string = "1" });
-    try source_obj1.put("value", .{ .integer = 200 }); // Override
+    var source_obj1: std.json.ObjectMap = .empty;
+    defer source_obj1.deinit(allocator);
+    try source_obj1.put(allocator, "id", .{ .string = "1" });
+    try source_obj1.put(allocator, "value", .{ .integer = 200 }); // Override
 
-    var source_obj2 = std.json.ObjectMap.init(allocator);
-    defer source_obj2.deinit();
-    try source_obj2.put("id", .{ .string = "2" });
-    try source_obj2.put("value", .{ .integer = 300 });
+    var source_obj2: std.json.ObjectMap = .empty;
+    defer source_obj2.deinit(allocator);
+    try source_obj2.put(allocator, "id", .{ .string = "2" });
+    try source_obj2.put(allocator, "value", .{ .integer = 300 });
 
     const source_items = try allocator.alloc(std.json.Value, 2);
     source_items[0] = .{ .object = source_obj1 };

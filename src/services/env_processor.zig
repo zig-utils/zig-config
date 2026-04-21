@@ -22,7 +22,7 @@ pub const EnvProcessor = struct {
             return config;
         }
 
-        var result = std.json.ObjectMap.init(self.allocator);
+        var result: std.json.ObjectMap = .empty;
 
         var iter = config.object.iterator();
         while (iter.next()) |entry| {
@@ -38,14 +38,14 @@ pub const EnvProcessor = struct {
                 defer self.allocator.free(env_value);
                 // Parse env var value with type awareness
                 const parsed_value = try self.parseEnvValue(env_value);
-                try result.put(try self.allocator.dupe(u8, key), parsed_value);
+                try result.put(self.allocator, try self.allocator.dupe(u8, key), parsed_value);
             } else if (value == .object) {
                 // Recursively process nested objects
                 const nested = try self.applyEnvVars(value, env_name);
-                try result.put(try self.allocator.dupe(u8, key), nested);
+                try result.put(self.allocator, try self.allocator.dupe(u8, key), nested);
             } else {
                 // Keep original value
-                try result.put(try self.allocator.dupe(u8, key), try utils.cloneJsonValue(self.allocator, value));
+                try result.put(self.allocator, try self.allocator.dupe(u8, key), try utils.cloneJsonValue(self.allocator, value));
             }
         }
 

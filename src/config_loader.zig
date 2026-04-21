@@ -113,7 +113,7 @@ pub const ConfigLoader = struct {
 
         // If still no config, create empty object
         if (final_config == null) {
-            final_config = .{ .object = std.json.ObjectMap.init(self.allocator) };
+            final_config = .{ .object = .empty };
         }
 
         // Extract nested key if specified
@@ -125,7 +125,7 @@ pub const ConfigLoader = struct {
                 final_config = nested_cloned;
             } else {
                 // Nested key not found, use empty object
-                final_config = .{ .object = std.json.ObjectMap.init(self.allocator) };
+                final_config = .{ .object = .empty };
             }
         }
 
@@ -293,10 +293,10 @@ test "loadConfig returns typed defaults when no file found" {
     defer allocator.free(cwd);
 
     // Create defaults
-    var defaults_obj = std.json.ObjectMap.init(allocator);
-    defer defaults_obj.deinit();
-    try defaults_obj.put("key", .{ .string = "value" });
-    try defaults_obj.put("port", .{ .integer = 3000 });
+    var defaults_obj: std.json.ObjectMap = .empty;
+    defer defaults_obj.deinit(allocator);
+    try defaults_obj.put(allocator, "key", .{ .string = "value" });
+    try defaults_obj.put(allocator, "port", .{ .integer = 3000 });
 
     var result = try loadConfig(TestConfig, allocator, .{
         .name = "nonexistent",
@@ -417,22 +417,24 @@ test "loadConfig extracts deeply nested key" {
 }
 
 test "extractNestedValue returns null for missing key" {
-    var obj = std.json.ObjectMap.init(std.testing.allocator);
-    defer obj.deinit();
-    try obj.put("foo", .{ .integer = 1 });
+    const allocator = std.testing.allocator;
+    var obj: std.json.ObjectMap = .empty;
+    defer obj.deinit(allocator);
+    try obj.put(allocator, "foo", .{ .integer = 1 });
 
     const value = extractNestedValue(.{ .object = obj }, "bar");
     try std.testing.expect(value == null);
 }
 
 test "extractNestedValue handles single key" {
-    var inner = std.json.ObjectMap.init(std.testing.allocator);
-    defer inner.deinit();
-    try inner.put("value", .{ .integer = 42 });
+    const allocator = std.testing.allocator;
+    var inner: std.json.ObjectMap = .empty;
+    defer inner.deinit(allocator);
+    try inner.put(allocator, "value", .{ .integer = 42 });
 
-    var obj = std.json.ObjectMap.init(std.testing.allocator);
-    defer obj.deinit();
-    try obj.put("den", .{ .object = inner });
+    var obj: std.json.ObjectMap = .empty;
+    defer obj.deinit(allocator);
+    try obj.put(allocator, "den", .{ .object = inner });
 
     const result = extractNestedValue(.{ .object = obj }, "den");
     try std.testing.expect(result != null);

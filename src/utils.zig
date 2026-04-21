@@ -27,10 +27,11 @@ pub fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.
             return .{ .array = std.json.Array.fromOwnedSlice(allocator, items) };
         },
         .object => |obj| {
-            var new_obj = std.json.ObjectMap.init(allocator);
+            var new_obj: std.json.ObjectMap = .empty;
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 try new_obj.put(
+                    allocator,
                     try allocator.dupe(u8, entry.key_ptr.*),
                     try cloneJsonValue(allocator, entry.value_ptr.*),
                 );
@@ -60,7 +61,7 @@ pub fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
             }
             // Free the ObjectMap itself
             var mutable_obj = obj;
-            mutable_obj.deinit();
+            mutable_obj.deinit(allocator);
         },
         else => {
             // Primitives (null, bool, integer, float, number_string) don't need freeing
@@ -129,9 +130,9 @@ test "cloneJsonValue clones strings" {
 test "cloneJsonValue clones objects" {
     const allocator = std.testing.allocator;
 
-    var obj = std.json.ObjectMap.init(allocator);
-    defer obj.deinit();
-    try obj.put("key", .{ .integer = 123 });
+    var obj: std.json.ObjectMap = .empty;
+    defer obj.deinit(allocator);
+    try obj.put(allocator, "key", .{ .integer = 123 });
 
     const cloned = try cloneJsonValue(allocator, .{ .object = obj });
     defer {
@@ -140,7 +141,7 @@ test "cloneJsonValue clones objects" {
             allocator.free(entry.key_ptr.*);
         }
         var mutable_obj = cloned.object;
-        mutable_obj.deinit();
+        mutable_obj.deinit(allocator);
     }
 
     try std.testing.expectEqual(@as(i64, 123), cloned.object.get("key").?.integer);
@@ -162,17 +163,17 @@ test "jsonValuesEqual compares strings" {
 test "jsonValuesEqual compares objects" {
     const allocator = std.testing.allocator;
 
-    var obj1 = std.json.ObjectMap.init(allocator);
-    defer obj1.deinit();
-    try obj1.put("key", .{ .integer = 123 });
+    var obj1: std.json.ObjectMap = .empty;
+    defer obj1.deinit(allocator);
+    try obj1.put(allocator, "key", .{ .integer = 123 });
 
-    var obj2 = std.json.ObjectMap.init(allocator);
-    defer obj2.deinit();
-    try obj2.put("key", .{ .integer = 123 });
+    var obj2: std.json.ObjectMap = .empty;
+    defer obj2.deinit(allocator);
+    try obj2.put(allocator, "key", .{ .integer = 123 });
 
-    var obj3 = std.json.ObjectMap.init(allocator);
-    defer obj3.deinit();
-    try obj3.put("key", .{ .integer = 456 });
+    var obj3: std.json.ObjectMap = .empty;
+    defer obj3.deinit(allocator);
+    try obj3.put(allocator, "key", .{ .integer = 456 });
 
     try std.testing.expect(jsonValuesEqual(.{ .object = obj1 }, .{ .object = obj2 }));
     try std.testing.expect(!jsonValuesEqual(.{ .object = obj1 }, .{ .object = obj3 }));
