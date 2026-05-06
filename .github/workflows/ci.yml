@@ -16,7 +16,7 @@ jobs:
         zig-version: ['0.17.0-dev.56+a8226cd53']
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: '0.17.0-dev.56+a8226cd53'
@@ -27,7 +27,7 @@ jobs:
     name: Format Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: '0.17.0-dev.56+a8226cd53'
