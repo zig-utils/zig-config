@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
 
     // Format check
     const fmt_check = b.addFmt(.{
-        .paths = &.{"src"},
+        .paths = &.{fmtPath(b, "src")},
         .check = true,
     });
 
@@ -55,3 +55,10 @@ pub fn build(b: *std.Build) void {
 
     // Note: Documentation, benchmarks, and examples will be added in later phases
 }
+
+/// Zig 0.17 takes `addFmt` paths as LazyPaths; 0.15/0.16 take plain strings.
+fn fmtPath(b: *std.Build, comptime path: []const u8) FmtPath {
+    return if (FmtPath == std.Build.LazyPath) b.path(path) else path;
+}
+
+const FmtPath = @typeInfo(@FieldType(std.Build.Step.Fmt.Options, "paths")).pointer.child;
