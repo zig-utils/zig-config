@@ -9,7 +9,11 @@ permissions:
   contents: write
 
 jobs:
+  source-ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: source-ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -20,8 +24,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to Pantry
-        uses: home-lang/pantry/packages/action@main
+        uses: pantry-pm/pantry/packages/action@6243f5d8af665b1568fdfdf4a225da3f35b4da29 # v0.11.179
         with:
+          version: '0.11.179'
           publish: zig
           install: 'false'
         env:

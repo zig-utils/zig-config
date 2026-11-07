@@ -1,10 +1,14 @@
 name: CI
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -13,22 +17,24 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        zig-version: ['0.17.0-dev']
+        zig-version: ['0.16.0', '0.17.1']
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: pantry-pm/pantry/packages/action@main
+      - uses: pantry-pm/pantry/packages/action@6243f5d8af665b1568fdfdf4a225da3f35b4da29 # v0.11.179
         with:
-          packages: zig@0.17.0-dev
-      - run: zig build
-      - run: zig build test
+          version: '0.11.179'
+          packages: zig@${{ matrix.zig-version }}
+      - run: zig build -j2 --maxrss 3221225472
+      - run: zig build test -j2 --maxrss 3221225472
 
   lint:
     name: Format Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pantry-pm/pantry/packages/action@main
+      - uses: pantry-pm/pantry/packages/action@6243f5d8af665b1568fdfdf4a225da3f35b4da29 # v0.11.179
         with:
-          packages: zig@0.17.0-dev
-      - run: zig fmt --check .
+          version: '0.11.179'
+          packages: zig@0.16.0
+      - run: zig fmt --check build.zig build.zig.zon src

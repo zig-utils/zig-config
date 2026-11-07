@@ -5,6 +5,7 @@
   "scripts": {
     "release": "pantry release patch --yes",
     "release:minor": "pantry release minor --yes",
-    "release:major": "pantry release major --yes"
+    "release:major": "pantry release major --yes",
+    "release:patch": "pantry release patch --yes"
   }
 }
