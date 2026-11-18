@@ -172,10 +172,14 @@ fn smartMergeArrays(
         return try concatArrays(allocator, target, source);
     }
 
-    // Find merge key
+    // Find merge key; every item on both sides must carry it as a string,
+    // or there is nothing to match items by.
     const merge_key = findMergeKey(target[0].object) orelse {
         return try concatArrays(allocator, target, source);
     };
+    if (!allHaveStringKey(target, merge_key) or !allHaveStringKey(source, merge_key)) {
+        return try concatArrays(allocator, target, source);
+    }
 
     var result = std.ArrayList(std.json.Value).empty;
     try result.ensureTotalCapacity(allocator, target.len + source.len);
@@ -228,6 +232,14 @@ fn isObjectArray(arr: []std.json.Value) bool {
     if (arr.len == 0) return false;
     for (arr) |item| {
         if (item != .object) return false;
+    }
+    return true;
+}
+
+fn allHaveStringKey(items: []std.json.Value, key: []const u8) bool {
+    for (items) |item| {
+        const value = item.object.get(key) orelse return false;
+        if (value != .string) return false;
     }
     return true;
 }
@@ -467,5 +479,22 @@ test "smartMerge falls back to concat for non-object arrays" {
     defer allocator.free(result.array.items);
 
     // Should concatenate like concat strategy
+    try std.testing.expectEqual(@as(usize, 4), result.array.items.len);
+}
+
+test "smartMerge falls back to concat when an item lacks the merge key" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const target = try std.json.parseFromSliceLeaky(std.json.Value, arena,
+        \\[{"id": "a", "v": 1}, {"name": "no id"}]
+    , .{});
+    const source = try std.json.parseFromSliceLeaky(std.json.Value, arena,
+        \\[{"id": 7}, {"id": "a", "v": 2}]
+    , .{});
+
+    // Used to unwrap a missing or non-string key and crash.
+    const result = try deepMerge(arena, target, source, .{ .strategy = .smart });
     try std.testing.expectEqual(@as(usize, 4), result.array.items.len);
 }
