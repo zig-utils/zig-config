@@ -66,16 +66,47 @@ pub fn main() !void {
 
 ## Configuration Sources
 
-ZigConfig loads configuration from multiple sources with the following priority (highest to lowest):
+ZigConfig layers configuration sources in a fixed order, each one over the last:
 
-1. **Environment variables** (highest priority)
-2. **Local project file** (`./myapp.json`, `./config/myapp.json`, `./.config/myapp.json`)
-3. **Home directory** (`~/.config/myapp.json`)
-4. **Defaults** (provided in code)
+1. **Defaults**: the struct's own field defaults, then `LoadOptions.defaults`
+2. **Config file**: the local project file (`./myapp.json`, `./config/myapp.json`,
+   `./.config/myapp.json`), else the home file (`~/.config/myapp.json`). Objects merge
+   key by key over the defaults, arrays by `merge_strategy`
+3. **Environment variables**
+4. **Overrides**: `LoadOptions.overrides`, for example values from command-line flags.
+   Objects merge key by key; arrays and other values replace
+
+`result.sources` lists the layers that contributed, in that order, with the file's path.
+
+### Errors that name the key and its source
+
+Pass a `Diagnostic` to find out what was wrong and where it came from:
+
+```zig
+var diag: zig_config.Diagnostic = .{};
+const config = zig_config.loadConfig(Config, allocator, .{
+    .name = "zavd",
+    .diagnostic = &diag,
+}) catch |err| {
+    // scan.max_size: expected integer from 0 to 18446744073709551615, found string "big"
+    // (from environment variable ZAVD_SCAN_MAX_SIZE)
+    std.debug.print("{s}\n", .{diag.message()});
+    return err;
+};
+```
+
+A wrong type or unknown key is `error.ConfigSchemaViolation`, a missing required key
+`error.ConfigValidationFailed`. `diag.key()` is the dotted key (`scan.exclude[1]`),
+`diag.source` the layer and `diag.origin()` the file path or variable name.
 
 ## Environment Variables
 
-Environment variables are automatically parsed with type awareness:
+With `loadConfig(T, ...)` the variable names come from `T`'s fields, nested structs included,
+so a key the file never mentions can still be set (`MYAPP_DB_PATH` for `db.path`), and each
+value is parsed as its field's type: a string field keeps `MYAPP_NAME=123` as the string
+`"123"`, a list field splits on commas or reads a JSON array, and a value that does not parse
+is reported with the variable's name. Untyped loading only overlays keys already present
+and guesses each value's type:
 
 ```bash
 # Boolean values

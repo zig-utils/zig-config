@@ -8,6 +8,8 @@ pub const ConfigSource = enum {
     package_json,
     env_vars,
     defaults,
+    /// `LoadOptions.overrides`, applied over every other source.
+    overrides,
 };
 
 /// Array merge strategy for deep merge
@@ -42,6 +44,16 @@ pub const LoadOptions = struct {
 
     /// Array merge strategy
     merge_strategy: MergeStrategy = .smart,
+
+    /// Values applied last, over defaults, the file and the environment (for
+    /// example from command-line flags). Objects merge key by key; anything
+    /// else, arrays included, replaces what the lower layers set.
+    overrides: ?std.json.Value = null,
+
+    /// Filled when loading fails because a value has the wrong type, a key is
+    /// unknown, or a required key is missing: the key, the source that set it
+    /// (file path or environment variable) and a readable message.
+    diagnostic: ?*@import("layers.zig").Diagnostic = null,
 
     /// Nested key to extract from config (e.g., "den" to get {"den": {...}} -> {...})
     /// Supports dot notation for deep nesting: "tooling.shell" extracts {"tooling": {"shell": {...}}} -> {...}

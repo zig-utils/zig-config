@@ -6,6 +6,7 @@ pub const types = @import("types.zig");
 pub const merge = @import("merge.zig");
 pub const config_loader = @import("config_loader.zig");
 pub const utils = @import("utils.zig");
+pub const layers = @import("layers.zig");
 
 // Services
 pub const FileLoader = @import("services/file_loader.zig").FileLoader;
@@ -21,6 +22,7 @@ pub const ConfigResult = types.ConfigResult;
 pub const UntypedConfigResult = types.UntypedConfigResult;
 pub const SourceInfo = types.SourceInfo;
 pub const MergeOptions = types.MergeOptions;
+pub const Diagnostic = layers.Diagnostic;
 
 // Main API
 pub const loadConfig = config_loader.loadConfig;
@@ -51,6 +53,7 @@ test {
     std.testing.refAllDecls(merge);
     std.testing.refAllDecls(config_loader);
     std.testing.refAllDecls(utils);
+    std.testing.refAllDecls(layers);
     std.testing.refAllDecls(FileLoader);
     std.testing.refAllDecls(EnvProcessor);
 }
