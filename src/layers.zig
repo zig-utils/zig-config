@@ -404,10 +404,8 @@ const CheckContext = struct {
                 const ok = switch (value) {
                     .string => |s| std.meta.stringToEnum(T, s) != null,
                     .integer => |n| blk: {
-                        inline for (comptime std.meta.tags(T)) |tag| {
-                            if (@backingInt(tag) == n) break :blk true;
-                        }
-                        break :blk false;
+                        const tag = std.enums.fromInt(T, n) orelse break :blk false;
+                        break :blk std.mem.indexOfScalar(T, std.meta.tags(T), tag) != null;
                     },
                     else => false,
                 };
