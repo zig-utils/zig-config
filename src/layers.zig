@@ -123,7 +123,19 @@ pub fn overlayEnvTyped(
     provenance: *Provenance,
 ) !bool {
     var keys: std.ArrayList([]const u8) = .empty;
-    return overlayStruct(T, arena, root, prefix, &keys, provenance);
+    return overlayStruct(T, arena, root, prefix, &keys, provenance, null);
+}
+
+pub fn overlayEnvTypedFromMap(
+    comptime T: type,
+    arena: Allocator,
+    root: *Value,
+    prefix: []const u8,
+    env: *const std.process.Environ.Map,
+    provenance: *Provenance,
+) !bool {
+    var keys: std.ArrayList([]const u8) = .empty;
+    return overlayStruct(T, arena, root, prefix, &keys, provenance, env);
 }
 
 fn overlayStruct(
@@ -133,6 +145,7 @@ fn overlayStruct(
     prefix: []const u8,
     keys: *std.ArrayList([]const u8),
     provenance: *Provenance,
+    environ: ?*const std.process.Environ.Map,
 ) !bool {
     var changed = false;
     inline for (comptime structFields(T)) |field| {
@@ -142,14 +155,18 @@ fn overlayStruct(
         defer _ = keys.pop();
 
         const env = try envName(arena, prefix, keys.items);
-        if (utils.getEnvVar(arena, env)) |raw| {
-            const value = try parseEnvAs(FieldType, arena, raw);
+        const raw = if (environ) |map|
+            if (map.get(env)) |slice| try arena.dupe(u8, slice) else null
+        else
+            utils.getEnvVar(arena, env);
+        if (raw) |text| {
+            const value = try parseEnvAs(FieldType, arena, text);
             try setPath(arena, root, keys.items, value);
             const path = try std.mem.join(arena, ".", keys.items);
             try provenance.mark(path, value, .{ .source = .env_vars, .detail = env });
             changed = true;
         } else if (comptime structChild(FieldType)) |Child| {
-            if (try overlayStruct(Child, arena, root, prefix, keys, provenance)) changed = true;
+            if (try overlayStruct(Child, arena, root, prefix, keys, provenance, environ)) changed = true;
         }
     }
     return changed;
@@ -184,7 +201,10 @@ fn parseEnvAs(comptime T: type, arena: Allocator, raw: []const u8) !Value {
             for (no) |w| if (std.ascii.eqlIgnoreCase(raw, w)) return .{ .bool = false };
             return string;
         },
-        .int => return if (std.fmt.parseInt(i64, raw, 10)) |n| .{ .integer = n } else |_| string,
+        .int => {
+            if (std.fmt.parseInt(i64, raw, 10)) |n| return .{ .integer = n } else |_| {}
+            if (std.fmt.parseInt(T, raw, 10)) |_| return .{ .number_string = raw } else |_| return string;
+        },
         .float => return if (std.fmt.parseFloat(f64, raw)) |f| .{ .float = f } else |_| string,
         .@"enum" => return string,
         .pointer => |ptr| {
@@ -317,11 +337,24 @@ pub fn check(
     diagnostic: ?*Diagnostic,
     env_prefix: []const u8,
 ) CheckError!void {
+    return checkWithIgnored(T, arena, value, provenance, diagnostic, env_prefix, null);
+}
+
+pub fn checkWithIgnored(
+    comptime T: type,
+    arena: Allocator,
+    value: Value,
+    provenance: *const Provenance,
+    diagnostic: ?*Diagnostic,
+    env_prefix: []const u8,
+    ignored_keys: ?*std.ArrayList([]const u8),
+) CheckError!void {
     var ctx: CheckContext = .{
         .arena = arena,
         .provenance = provenance,
         .diagnostic = diagnostic,
         .env_prefix = env_prefix,
+        .ignored_keys = ignored_keys,
     };
     return ctx.checkValue(T, value, "");
 }
@@ -331,6 +364,7 @@ const CheckContext = struct {
     provenance: *const Provenance,
     diagnostic: ?*Diagnostic,
     env_prefix: []const u8,
+    ignored_keys: ?*std.ArrayList([]const u8),
 
     fn mismatch(self: *CheckContext, path: []const u8, expected: []const u8, value: Value) CheckError {
         if (self.diagnostic) |d| {
@@ -353,7 +387,7 @@ const CheckContext = struct {
                     .integer => |n| std.math.cast(T, n) != null,
                     .float => |f| @round(f) == f and
                         f >= @as(f64, @floatFromInt(std.math.minInt(T))) and
-                        f <= @as(f64, @floatFromInt(std.math.maxInt(T))),
+                        f < @as(f64, @floatFromInt(std.math.maxInt(T))) + 1.0,
                     .number_string => |s| if (std.fmt.parseInt(T, s, 10)) |_| true else |_| false,
                     else => false,
                 };
@@ -371,7 +405,7 @@ const CheckContext = struct {
                     .string => |s| std.meta.stringToEnum(T, s) != null,
                     .integer => |n| blk: {
                         inline for (comptime std.meta.tags(T)) |tag| {
-                            if (@intFromEnum(tag) == n) break :blk true;
+                            if (@backingInt(tag) == n) break :blk true;
                         }
                         break :blk false;
                     },
@@ -418,6 +452,10 @@ const CheckContext = struct {
                         if (std.mem.eql(u8, entry.key_ptr.*, field.name)) continue :outer;
                     }
                     const child = try joinKey(self.arena, path, entry.key_ptr.*);
+                    if (self.ignored_keys) |keys| {
+                        try keys.append(self.arena, child);
+                        continue;
+                    }
                     if (self.diagnostic) |d| d.set(child, self.provenance.lookup(child), "unknown key", .{});
                     return error.ConfigSchemaViolation;
                 }

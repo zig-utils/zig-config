@@ -23,10 +23,12 @@ pub const UntypedConfigResult = types.UntypedConfigResult;
 pub const SourceInfo = types.SourceInfo;
 pub const MergeOptions = types.MergeOptions;
 pub const Diagnostic = layers.Diagnostic;
+pub const DecodeOptions = config_loader.DecodeOptions;
 
 // Main API
 pub const loadConfig = config_loader.loadConfig;
 pub const tryLoadConfig = config_loader.tryLoadConfig;
+pub const decodeJson = config_loader.decodeJson;
 pub const deepMerge = merge.deepMerge;
 pub const cloneJsonValue = utils.cloneJsonValue;
 pub const jsonValuesEqual = utils.jsonValuesEqual;

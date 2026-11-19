@@ -268,6 +268,71 @@ pub fn loadConfig(
     };
 }
 
+pub const DecodeOptions = struct {
+    /// Source name used in schema diagnostics.
+    path: []const u8 = "",
+    env_prefix: []const u8,
+    environ: ?*const std.process.Environ.Map = null,
+    diagnostic: ?*layers.Diagnostic = null,
+    /// Collect dotted paths of unknown keys (or subtrees) instead of failing.
+    ignored_keys: ?*std.ArrayList([]const u8) = null,
+};
+
+/// Decode caller-supplied JSON and overlay typed values from a caller-supplied
+/// environment. Returned data and ignored key paths live in the caller's arena.
+pub fn decodeJson(
+    comptime T: type,
+    arena: std.mem.Allocator,
+    json: []const u8,
+    options: DecodeOptions,
+) !T {
+    var value = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{ .allocate = .alloc_always });
+    var provenance: layers.Provenance = .init(arena);
+    try provenance.mark("", .null, .{ .source = .file_local, .detail = options.path });
+    if (value == .object) if (options.environ) |env| {
+        _ = try layers.overlayEnvTypedFromMap(T, arena, &value, options.env_prefix, env, &provenance);
+    };
+    try layers.checkWithIgnored(T, arena, value, &provenance, options.diagnostic, options.env_prefix, options.ignored_keys);
+    return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = options.ignored_keys != null });
+}
+
+test "decode explicit JSON with typed environment and ignored paths" {
+    const Config = struct {
+        server: struct { count: u32 = 1, name: []const u8 = "" } = .{},
+        cap: u64 = 0,
+    };
+    var state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env: std.process.Environ.Map = .init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("APP_SERVER_COUNT", "4");
+    try env.put("APP_CAP", "18446744073709551615");
+    var ignored: std.ArrayList([]const u8) = .empty;
+    var diagnostic: layers.Diagnostic = .{};
+    const options: DecodeOptions = .{
+        .path = "settings.json",
+        .env_prefix = "APP",
+        .environ = &env,
+        .diagnostic = &diagnostic,
+        .ignored_keys = &ignored,
+    };
+    const value = try decodeJson(Config, arena,
+        \\{"server":{"count":2,"name":"test","obsolete":true},"unused":{"nested":1}}
+    , options);
+    try std.testing.expectEqual(4, value.server.count);
+    try std.testing.expectEqualStrings("test", value.server.name);
+    try std.testing.expectEqual(std.math.maxInt(u64), value.cap);
+    try std.testing.expectEqual(2, ignored.items.len);
+    try std.testing.expectEqualStrings("unused", ignored.items[0]);
+    try std.testing.expectEqualStrings("server.obsolete", ignored.items[1]);
+    try std.testing.expectError(error.ConfigSchemaViolation, decodeJson(Config, arena, "[]", options));
+    try std.testing.expectEqualStrings("settings.json", diagnostic.origin());
+    try std.testing.expectError(error.ConfigSchemaViolation, decodeJson(Config, arena,
+        \\{"cap":18446744073709551616.0}
+    , .{ .env_prefix = "APP" }));
+}
+
 /// Load untyped configuration (internal use)
 pub fn loadConfigUntyped(
     allocator: std.mem.Allocator,
