@@ -111,6 +111,34 @@ fn envName(arena: Allocator, prefix: []const u8, keys: []const []const u8) ![]co
     return processor.generateEnvName(prefix, keys);
 }
 
+const EnvField = struct {
+    name: []const u8,
+    parse: *const fn (Allocator, []const u8) Allocator.Error!Value,
+    children: []const EnvField,
+};
+
+fn envFields(comptime T: type) []const EnvField {
+    comptime {
+        const fields = structFields(T);
+        var out: [fields.len]EnvField = undefined;
+        for (fields, &out) |field, *entry| {
+            const FieldType = field.type;
+            const Parser = struct {
+                fn run(arena: Allocator, raw: []const u8) Allocator.Error!Value {
+                    return parseEnvAs(FieldType, arena, raw);
+                }
+            };
+            entry.* = .{
+                .name = field.name,
+                .parse = Parser.run,
+                .children = if (structChild(FieldType)) |Child| envFields(Child) else &.{},
+            };
+        }
+        const result = out;
+        return &result;
+    }
+}
+
 /// Overlay environment variables for every field of `T` (recursing into
 /// struct fields): `PREFIX_FIELD`, `PREFIX_PARENT_FIELD`, ... Values are parsed
 /// as the field's type; a value that does not parse is kept as a string so
@@ -123,7 +151,7 @@ pub fn overlayEnvTyped(
     provenance: *Provenance,
 ) !bool {
     var keys: std.ArrayList([]const u8) = .empty;
-    return overlayStruct(T, arena, root, prefix, &keys, provenance, null);
+    return overlayFields(comptime envFields(T), arena, root, prefix, &keys, provenance, null);
 }
 
 pub fn overlayEnvTypedFromMap(
@@ -135,22 +163,22 @@ pub fn overlayEnvTypedFromMap(
     provenance: *Provenance,
 ) !bool {
     var keys: std.ArrayList([]const u8) = .empty;
-    return overlayStruct(T, arena, root, prefix, &keys, provenance, env);
+    return overlayFields(comptime envFields(T), arena, root, prefix, &keys, provenance, env);
 }
 
-fn overlayStruct(
-    comptime T: type,
+// Walk a read-only schema so the overlay logic is shared across config types.
+fn overlayFields(
+    fields: []const EnvField,
     arena: Allocator,
     root: *Value,
     prefix: []const u8,
     keys: *std.ArrayList([]const u8),
     provenance: *Provenance,
     environ: ?*const std.process.Environ.Map,
-) !bool {
+) Allocator.Error!bool {
     var changed = false;
-    inline for (comptime structFields(T)) |field| {
+    for (fields) |field| {
         const name = field.name;
-        const FieldType = field.type;
         try keys.append(arena, name);
         defer _ = keys.pop();
 
@@ -160,13 +188,13 @@ fn overlayStruct(
         else
             utils.getEnvVar(arena, env);
         if (raw) |text| {
-            const value = try parseEnvAs(FieldType, arena, text);
+            const value = try field.parse(arena, text);
             try setPath(arena, root, keys.items, value);
             const path = try std.mem.join(arena, ".", keys.items);
             try provenance.mark(path, value, .{ .source = .env_vars, .detail = env });
             changed = true;
-        } else if (comptime structChild(FieldType)) |Child| {
-            if (try overlayStruct(Child, arena, root, prefix, keys, provenance, environ)) changed = true;
+        } else if (field.children.len != 0) {
+            if (try overlayFields(field.children, arena, root, prefix, keys, provenance, environ)) changed = true;
         }
     }
     return changed;
@@ -374,6 +402,66 @@ const CheckContext = struct {
         return error.ConfigSchemaViolation;
     }
 
+    const CheckedField = struct {
+        name: []const u8,
+        required: bool,
+        check: *const fn (*CheckContext, Value, []const u8) CheckError!void,
+    };
+
+    fn checkedFields(comptime T: type) []const CheckedField {
+        comptime {
+            const fields = structFields(T);
+            var out: [fields.len]CheckedField = undefined;
+            for (fields, &out) |field, *entry| {
+                const FieldType = field.type;
+                const Checker = struct {
+                    fn run(ctx: *CheckContext, value: Value, path: []const u8) CheckError!void {
+                        return ctx.checkValue(FieldType, value, path);
+                    }
+                };
+                entry.* = .{
+                    .name = field.name,
+                    .required = !field.has_default and @typeInfo(FieldType) != .optional,
+                    .check = Checker.run,
+                };
+            }
+            const result = out;
+            return &result;
+        }
+    }
+
+    fn checkObject(self: *CheckContext, fields: []const CheckedField, value: Value, path: []const u8) CheckError!void {
+        if (value != .object) return self.mismatch(path, "object", value);
+        var it = value.object.iterator();
+        outer: while (it.next()) |entry| {
+            for (fields) |field| {
+                if (std.mem.eql(u8, entry.key_ptr.*, field.name)) continue :outer;
+            }
+            const child = try joinKey(self.arena, path, entry.key_ptr.*);
+            if (self.ignored_keys) |keys| {
+                try keys.append(self.arena, child);
+                continue;
+            }
+            if (self.diagnostic) |d| d.set(child, self.provenance.lookup(child), "unknown key", .{});
+            return error.ConfigSchemaViolation;
+        }
+        for (fields) |field| {
+            const child = try joinKey(self.arena, path, field.name);
+            if (value.object.get(field.name)) |field_value| {
+                try field.check(self, field_value, child);
+            } else if (field.required) {
+                if (self.diagnostic) |d| {
+                    var keys: std.ArrayList([]const u8) = .empty;
+                    var parts = std.mem.splitScalar(u8, child, '.');
+                    while (parts.next()) |part| try keys.append(self.arena, part);
+                    const env = try envName(self.arena, self.env_prefix, keys.items);
+                    d.set(child, null, "missing; set it in defaults, the file, {s}, or overrides", .{env});
+                }
+                return error.ConfigValidationFailed;
+            }
+        }
+    }
+
     fn checkValue(self: *CheckContext, comptime T: type, value: Value, path: []const u8) CheckError!void {
         if (T == Value) return;
         switch (@typeInfo(T)) {
@@ -441,38 +529,7 @@ const CheckContext = struct {
                     try self.checkValue(arr.child, item, item_path);
                 }
             },
-            .@"struct" => {
-                const fields = comptime structFields(T);
-                if (value != .object) return self.mismatch(path, "object", value);
-                var it = value.object.iterator();
-                outer: while (it.next()) |entry| {
-                    inline for (fields) |field| {
-                        if (std.mem.eql(u8, entry.key_ptr.*, field.name)) continue :outer;
-                    }
-                    const child = try joinKey(self.arena, path, entry.key_ptr.*);
-                    if (self.ignored_keys) |keys| {
-                        try keys.append(self.arena, child);
-                        continue;
-                    }
-                    if (self.diagnostic) |d| d.set(child, self.provenance.lookup(child), "unknown key", .{});
-                    return error.ConfigSchemaViolation;
-                }
-                inline for (fields) |field| {
-                    const child = try joinKey(self.arena, path, field.name);
-                    if (value.object.get(field.name)) |field_value| {
-                        try self.checkValue(field.type, field_value, child);
-                    } else if (!field.has_default and @typeInfo(field.type) != .optional) {
-                        if (self.diagnostic) |d| {
-                            var keys: std.ArrayList([]const u8) = .empty;
-                            var parts = std.mem.splitScalar(u8, child, '.');
-                            while (parts.next()) |part| try keys.append(self.arena, part);
-                            const env = try envName(self.arena, self.env_prefix, keys.items);
-                            d.set(child, null, "missing; set it in defaults, the file, {s}, or overrides", .{env});
-                        }
-                        return error.ConfigValidationFailed;
-                    }
-                }
-            },
+            .@"struct" => try self.checkObject(comptime checkedFields(T), value, path),
             // Unions and other shapes: left to std.json.
             else => {},
         }
